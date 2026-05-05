@@ -23,7 +23,11 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Solo-Con ERP'),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Image.asset('assets/logo.png', fit: BoxFit.contain),
+        ),
+        title: const Text('Bismillah'),
         actions: [
           _SyncIndicator(status: sync),
           IconButton(

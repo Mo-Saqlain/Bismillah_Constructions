@@ -321,9 +321,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           const SizedBox(height: 24),
           Center(
-            child: Text(
-              'Bismillah Constructions ERP',
-              style: Theme.of(context).textTheme.bodySmall,
+            child: Column(
+              children: [
+                Image.asset('assets/logo.png', height: 48),
+                const SizedBox(height: 4),
+                Text(
+                  'Bismillah',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ),
           ),
         ],

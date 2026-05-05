@@ -15,5 +15,5 @@ Future<void> main() async {
     );
   }
 
-  runApp(const ProviderScope(child: SoloConApp()));
+  runApp(const ProviderScope(child: BismillahApp()));
 }

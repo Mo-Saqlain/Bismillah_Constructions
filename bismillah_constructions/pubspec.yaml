@@ -1,5 +1,5 @@
-name: bismillah_constructions
-description: "Solo-Con ERP — offline-first double-entry ledger for construction projects."
+name: Bismillah
+description: "Bismillah — offline-first double-entry ledger for construction projects."
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -45,6 +45,15 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/logo.png"
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo.png

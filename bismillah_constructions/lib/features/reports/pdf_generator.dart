@@ -83,7 +83,7 @@ class PdfGenerator {
   static pw.Widget _header(String title, String subtitle) => pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Text('Solo-Con ERP',
+          pw.Text('Bismillah',
               style: pw.TextStyle(
                   fontSize: 10, color: PdfColors.grey700)),
           pw.SizedBox(height: 2),

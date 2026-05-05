@@ -74,7 +74,7 @@ class _TransactionHistoryScreenState
                         .withValues(alpha: 0.18)
                     : null,
                 child: InkWell(
-                  onLongPress: () =>
+                  onTap: () =>
                       _showActions(context, ref, dr.transactionId, isDeleted),
                   child: Padding(
                     padding: const EdgeInsets.all(12),
@@ -121,6 +121,12 @@ class _TransactionHistoryScreenState
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodySmall),
+                                const SizedBox(width: 4),
+                                Icon(Icons.more_vert,
+                                    size: 16,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant),
                               ],
                             ),
                           ],
@@ -144,15 +150,6 @@ class _TransactionHistoryScreenState
                           Text(dr.description!,
                               style: Theme.of(context).textTheme.bodySmall),
                         ],
-                        const SizedBox(height: 4),
-                        Text('Long-press for actions',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant)),
                       ],
                     ),
                   ),
@@ -201,18 +198,16 @@ class _TransactionHistoryScreenState
                     ),
                   );
                   if (confirm != true) return;
-                  final ledger = await ref.read(ledgerRepoProvider.future);
-                  await ledger.hardDeleteTransaction(txnId);
-                  // Force-invalidate the entries providers so the deleted
-                  // row disappears immediately (the ledger version bump alone
-                  // isn't always enough if the parent's selection ref was
-                  // stale).
-                  ref.invalidate(allEntriesProvider);
-                  ref.invalidate(allEntriesIncludingDeletedProvider);
-                  ref.invalidate(recentEntriesProvider);
-                  bumpLedger(ref);
-                  messenger.showSnackBar(
-                      const SnackBar(content: Text('Transaction deleted')));
+                  try {
+                    final ledger = await ref.read(ledgerRepoProvider.future);
+                    await ledger.hardDeleteTransaction(txnId);
+                    bumpLedger(ref);
+                    messenger.showSnackBar(
+                        const SnackBar(content: Text('Transaction deleted')));
+                  } catch (e) {
+                    messenger.showSnackBar(
+                        SnackBar(content: Text('Delete failed: $e')));
+                  }
                 },
               ),
             if (!isDeleted)
@@ -222,13 +217,16 @@ class _TransactionHistoryScreenState
                 subtitle: const Text(
                     'Marks the transaction as deleted but keeps it visible with strikethrough when "Show deleted" is on'),
                 onTap: () async {
-                  final ledger = await ref.read(ledgerRepoProvider.future);
-                  await ledger.softDeleteTransaction(txnId);
-                  ref.invalidate(allEntriesProvider);
-                  ref.invalidate(allEntriesIncludingDeletedProvider);
-                  ref.invalidate(recentEntriesProvider);
-                  bumpLedger(ref);
+                  final messenger = ScaffoldMessenger.of(context);
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  try {
+                    final ledger = await ref.read(ledgerRepoProvider.future);
+                    await ledger.softDeleteTransaction(txnId);
+                    bumpLedger(ref);
+                  } catch (e) {
+                    messenger.showSnackBar(
+                        SnackBar(content: Text('Delete failed: $e')));
+                  }
                 },
               ),
             if (isDeleted)
@@ -236,13 +234,16 @@ class _TransactionHistoryScreenState
                 leading: const Icon(Icons.restore),
                 title: const Text('Restore'),
                 onTap: () async {
-                  final ledger = await ref.read(ledgerRepoProvider.future);
-                  await ledger.restoreTransaction(txnId);
-                  ref.invalidate(allEntriesProvider);
-                  ref.invalidate(allEntriesIncludingDeletedProvider);
-                  ref.invalidate(recentEntriesProvider);
-                  bumpLedger(ref);
+                  final messenger = ScaffoldMessenger.of(context);
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  try {
+                    final ledger = await ref.read(ledgerRepoProvider.future);
+                    await ledger.restoreTransaction(txnId);
+                    bumpLedger(ref);
+                  } catch (e) {
+                    messenger.showSnackBar(
+                        SnackBar(content: Text('Restore failed: $e')));
+                  }
                 },
               ),
             if (!isDeleted)
@@ -252,12 +253,16 @@ class _TransactionHistoryScreenState
                 subtitle: const Text(
                     'Adds an offsetting transaction (recommended for accounting integrity)'),
                 onTap: () async {
-                  final ledger = await ref.read(ledgerRepoProvider.future);
-                  await ledger.postReversal(txnId);
-                  ref.invalidate(allEntriesProvider);
-                  ref.invalidate(recentEntriesProvider);
-                  bumpLedger(ref);
+                  final messenger = ScaffoldMessenger.of(context);
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  try {
+                    final ledger = await ref.read(ledgerRepoProvider.future);
+                    await ledger.postReversal(txnId);
+                    bumpLedger(ref);
+                  } catch (e) {
+                    messenger.showSnackBar(
+                        SnackBar(content: Text('Failed: $e')));
+                  }
                 },
               ),
           ],

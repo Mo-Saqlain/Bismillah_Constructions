@@ -5,8 +5,8 @@ import 'core/theme.dart';
 import 'features/home/home_screen.dart';
 import 'providers/providers.dart';
 
-class SoloConApp extends ConsumerWidget {
-  const SoloConApp({super.key});
+class BismillahApp extends ConsumerWidget {
+  const BismillahApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -20,7 +20,7 @@ class SoloConApp extends ConsumerWidget {
     final mode = ref.watch(themeModeProvider);
 
     return MaterialApp(
-      title: 'Solo-Con ERP',
+      title: 'Bismillah',
       debugShowCheckedModeBanner: false,
       themeMode: mode,
       theme: buildTheme(brightness: Brightness.light),

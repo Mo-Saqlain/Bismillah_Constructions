@@ -249,7 +249,7 @@ class MongoConfig {
   /// PASTE YOUR ATLAS URI HERE. Leave the trailing `/<dbname>` off — the code
   /// appends [dbName] for you.
   static const _uri =
-      'mongodb+srv://USER:PASS@cluster0.mongodb.net/';
+      'mongodb+srv://saqlain:d2689b1d@cluster0.5z3lijl.mongodb.net/?appName=Cluster0';
 
   static const uri =
       String.fromEnvironment('MONGO_URI', defaultValue: _uri);
