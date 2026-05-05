@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import 'csv_export.dart';
 import 'pdf_generator.dart';
 
 class IncomeStatementScreen extends ConsumerStatefulWidget {
@@ -96,27 +97,65 @@ class _IncomeStatementScreenState
                     ),
                   ),
                   const SizedBox(height: 16),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.picture_as_pdf),
-                    label: const Text('Export as PDF'),
-                    onPressed: () async {
-                      String? name;
-                      if (_projectId != null) {
-                        final repo =
-                            await ref.read(entityRepoProvider.future);
-                        name = (await repo.project(_projectId!))?.name;
-                      }
-                      await PdfGenerator.previewIncomeStatement(
-                        IncomeStatementData(
-                          projectName: name,
-                          revenue: f.rev,
-                          materialCosts: f.mat,
-                          labourCosts: f.lab,
-                          generatedAt: DateTime.now(),
-                        ),
-                      );
-                    },
-                  ),
+                  Row(children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.picture_as_pdf),
+                        label: const Text('PDF'),
+                        onPressed: () async {
+                          String? name;
+                          if (_projectId != null) {
+                            final repo =
+                                await ref.read(entityRepoProvider.future);
+                            name = (await repo.project(_projectId!))?.name;
+                          }
+                          await PdfGenerator.previewIncomeStatement(
+                            IncomeStatementData(
+                              projectName: name,
+                              revenue: f.rev,
+                              materialCosts: f.mat,
+                              labourCosts: f.lab,
+                              generatedAt: DateTime.now(),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.file_download),
+                        label: const Text('CSV'),
+                        onPressed: () async {
+                          String? name = 'All projects';
+                          if (_projectId != null) {
+                            final repo =
+                                await ref.read(entityRepoProvider.future);
+                            name =
+                                (await repo.project(_projectId!))?.name ??
+                                    name;
+                          }
+                          final csv = CsvExport.build(
+                            headers: ['Line', 'Amount'],
+                            rows: [
+                              ['Revenue', f.rev.toStringAsFixed(2)],
+                              ['Material Costs', (-f.mat).toStringAsFixed(2)],
+                              ['Labour Costs', (-f.lab).toStringAsFixed(2)],
+                              ['Total Costs',
+                                  (-(f.mat + f.lab)).toStringAsFixed(2)],
+                              ['Net Profit / (Loss)', net.toStringAsFixed(2)],
+                            ],
+                          );
+                          await CsvExport.share(
+                            fileName:
+                                'income_statement_${DateTime.now().millisecondsSinceEpoch}',
+                            csv: csv,
+                            subject: 'Income Statement — $name',
+                          );
+                        },
+                      ),
+                    ),
+                  ]),
                 ],
               );
             },

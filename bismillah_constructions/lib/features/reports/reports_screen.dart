@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'aging_analysis_screen.dart';
 import 'balance_sheet_screen.dart';
-import 'customer_ledger_screen.dart';
+import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
+import 'project_bva_picker_screen.dart';
+import 'project_ledger_screen.dart';
 import 'supplier_ledger_picker_screen.dart';
+import 'wage_register_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -27,29 +31,66 @@ class ReportsScreen extends StatelessWidget {
           _ReportTile(
             icon: Icons.account_balance,
             title: 'Balance Sheet',
-            subtitle: 'Assets vs Liabilities + Equity (with balance check)',
+            subtitle: 'Assets vs Liabilities + Equity',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                     builder: (_) => const BalanceSheetScreen())),
           ),
           _ReportTile(
+            icon: Icons.swap_vert,
+            title: 'Cash Flow',
+            subtitle: 'Monthly Δ-cash across all wallets (12-month rolling)',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CashFlowScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.assessment,
+            title: 'Budget vs Actual',
+            subtitle: 'Project budget vs actual spend, by category',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ProjectBvaPickerScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.engineering,
+            title: 'Wage Register',
+            subtitle: 'Labour payments grouped by worker / supplier',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const WageRegisterScreen())),
+          ),
+          _ReportTile(
             icon: Icons.receipt_long,
             title: 'Supplier Ledger',
-            subtitle: 'Statement of account for a supplier (filter by project)',
+            subtitle:
+                'Statement of account for a supplier (across or within a project)',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                     builder: (_) => const SupplierLedgerPickerScreen())),
           ),
           _ReportTile(
-            icon: Icons.person_search,
-            title: 'Customer Ledger',
-            subtitle: 'Receivables statement for a specific customer',
+            icon: Icons.foundation,
+            title: 'Project Ledger',
+            subtitle: 'All transactions for a single project (running balance)',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) => const CustomerLedgerPickerScreen())),
+                    builder: (_) => const ProjectLedgerPickerScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.hourglass_bottom,
+            title: 'Aging — Payables',
+            subtitle:
+                'Outstanding supplier payables bucketed 0-30 / 31-60 / 61-90 / 90+',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const AgingAnalysisScreen())),
           ),
         ],
       ),

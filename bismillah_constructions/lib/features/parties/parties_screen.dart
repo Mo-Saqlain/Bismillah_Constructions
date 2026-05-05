@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
@@ -7,47 +6,72 @@ import '../../core/formatters.dart';
 import '../../data/models/party.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
-import '../reports/customer_ledger_screen.dart';
-import '../reports/supplier_ledger_screen.dart';
 
-enum PartyKind { customer, supplier }
-
-class PartiesScreen extends ConsumerWidget {
-  const PartiesScreen({super.key, required this.kind});
-  final PartyKind kind;
-
-  String get _title => kind == PartyKind.customer ? 'Customers' : 'Suppliers';
-  String get _singular => kind == PartyKind.customer ? 'Customer' : 'Supplier';
-  IconData get _icon =>
-      kind == PartyKind.customer ? Icons.person : Icons.local_shipping;
+/// Suppliers list. Customers were removed entirely; the client is now just a
+/// free-text field on the project.
+///
+/// Tap on a supplier opens an action sheet (Edit / View info / Archive).
+/// Ledgers live in the Reports tab — they intentionally do **not** open from
+/// the supplier list.
+class SuppliersScreen extends ConsumerStatefulWidget {
+  const SuppliersScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final list = kind == PartyKind.customer
-        ? ref.watch(customersProvider)
+  ConsumerState<SuppliersScreen> createState() => _SuppliersScreenState();
+}
+
+class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
+  bool _showArchived = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _showArchived
+        ? ref.watch(archivedSuppliersProvider)
         : ref.watch(suppliersProvider);
 
     return Scaffold(
-      appBar: AppBar(title: Text(_title)),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showForm(context, ref),
-        icon: const Icon(Icons.add),
-        label: Text('New $_singular'),
+      appBar: AppBar(
+        title: Text(_showArchived ? 'Archived Suppliers' : 'Suppliers'),
+        actions: [
+          IconButton(
+            tooltip: _showArchived ? 'Show active' : 'Show archived',
+            icon: Icon(
+                _showArchived ? Icons.unarchive : Icons.archive_outlined),
+            onPressed: () =>
+                setState(() => _showArchived = !_showArchived),
+          ),
+        ],
       ),
+      floatingActionButton: _showArchived
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _showSupplierForm(context, ref),
+              icon: const Icon(Icons.add),
+              label: const Text('New Supplier'),
+            ),
       body: AsyncView<List<Party>>(
         value: list,
-        data: (parties) {
-          if (parties.isEmpty) {
+        data: (suppliers) {
+          if (suppliers.isEmpty) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_icon, size: 56, color: Colors.grey),
+                    const Icon(Icons.local_shipping,
+                        size: 56, color: Colors.grey),
                     const SizedBox(height: 12),
-                    Text('No ${_title.toLowerCase()} yet',
+                    Text(
+                        _showArchived
+                            ? 'No archived suppliers'
+                            : 'No suppliers yet',
                         style: Theme.of(context).textTheme.titleMedium),
+                    if (!_showArchived) ...[
+                      const SizedBox(height: 4),
+                      const Text('Tap "New Supplier" to add one.',
+                          textAlign: TextAlign.center),
+                    ],
                   ],
                 ),
               ),
@@ -55,26 +79,33 @@ class PartiesScreen extends ConsumerWidget {
           }
           return ListView.separated(
             padding: const EdgeInsets.all(12),
-            itemCount: parties.length,
+            itemCount: suppliers.length,
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (_, i) {
-              final p = parties[i];
+              final p = suppliers[i];
               return Card(
                 child: ListTile(
-                  leading: CircleAvatar(child: Icon(_icon)),
-                  title: Text(p.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: _buildSubtitle(p),
-                  trailing: Text(fmtDate(p.createdAt),
-                      style: Theme.of(context).textTheme.bodySmall),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => kind == PartyKind.supplier
-                          ? SupplierLedgerScreen(supplierId: p.id)
-                          : CustomerLedgerScreen(customerId: p.id),
+                  leading: CircleAvatar(
+                    backgroundColor: p.archived
+                        ? Colors.brown.shade100
+                        : null,
+                    child: Icon(
+                      p.archived
+                          ? Icons.archive
+                          : Icons.local_shipping,
+                      color: p.archived ? Colors.brown.shade800 : null,
                     ),
                   ),
+                  title: Text(p.name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        decoration:
+                            p.archived ? TextDecoration.lineThrough : null,
+                      )),
+                  subtitle: _subtitle(p),
+                  trailing: Text(fmtDate(p.createdAt),
+                      style: Theme.of(context).textTheme.bodySmall),
+                  onTap: () => _showSupplierActions(context, ref, p),
                 ),
               );
             },
@@ -84,130 +115,121 @@ class PartiesScreen extends ConsumerWidget {
     );
   }
 
-  Widget? _buildSubtitle(Party p) {
+  Widget? _subtitle(Party p) {
     final lines = <String>[];
     if (p.phone != null) lines.add(p.phone!);
-    if (kind == PartyKind.customer) {
-      if (p.ntnCnic != null) lines.add('NTN/CNIC: ${p.ntnCnic}');
-      if (p.address != null) lines.add(p.address!);
-      if (p.creditLimit != null) {
-        lines.add('Credit Limit: ${fmtMoney(p.creditLimit!)}');
-      }
-    } else {
-      if (p.category != null) lines.add(p.category!.label);
-      if (p.taxStatus != null) lines.add('Tax: ${p.taxStatus}');
-    }
+    if (p.category != null) lines.add(p.category!.label);
+    if (p.taxStatus != null) lines.add('Tax: ${p.taxStatus}');
+    if (p.archived) lines.add('ARCHIVED');
     if (lines.isEmpty) return null;
     return Text(lines.join(' · '), maxLines: 2, overflow: TextOverflow.ellipsis);
   }
 
-  void _showForm(BuildContext context, WidgetRef ref) {
-    if (kind == PartyKind.customer) {
-      _showCustomerForm(context, ref);
-    } else {
-      _showSupplierForm(context, ref);
-    }
-  }
-
-  void _showCustomerForm(BuildContext context, WidgetRef ref) {
-    final nameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final ntnCtrl = TextEditingController();
-    final addressCtrl = TextEditingController();
-    final creditCtrl = TextEditingController();
-
+  void _showSupplierActions(BuildContext context, WidgetRef ref, Party p) {
     showModalBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      builder: (sheetCtx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom,
-          left: 16,
-          right: 16,
-          top: 16,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('New Customer',
-                  style: Theme.of(sheetCtx).textTheme.titleLarge),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameCtrl,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: 'Name *'),
-                textCapitalization: TextCapitalization.words,
+      builder: (sheetCtx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('View info'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _showSupplierInfo(context, p);
+              },
+            ),
+            if (!p.archived)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit'),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _showSupplierForm(context, ref, existing: p);
+                },
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: phoneCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'Phone (optional)'),
-                keyboardType: TextInputType.phone,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ntnCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'NTN / CNIC (optional)'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: addressCtrl,
-                decoration: const InputDecoration(labelText: 'Address (optional)'),
-                textCapitalization: TextCapitalization.sentences,
-                maxLines: 2,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: creditCtrl,
-                decoration: const InputDecoration(
-                    labelText: 'Credit Limit (optional)', prefixText: 'Rs '),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                ],
-              ),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: () async {
-                  final name = nameCtrl.text.trim();
-                  if (name.isEmpty) return;
+            if (!p.archived)
+              ListTile(
+                leading: const Icon(Icons.archive_outlined),
+                title: const Text('Archive'),
+                subtitle: const Text(
+                    'Hidden from active list — ledger history preserved'),
+                onTap: () async {
                   final repo = await ref.read(entityRepoProvider.future);
-                  await repo.createCustomer(
-                    name: name,
-                    phone: phoneCtrl.text.trim().isEmpty
-                        ? null
-                        : phoneCtrl.text.trim(),
-                    ntnCnic:
-                        ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
-                    address: addressCtrl.text.trim().isEmpty
-                        ? null
-                        : addressCtrl.text.trim(),
-                    creditLimit: double.tryParse(creditCtrl.text),
-                  );
+                  await repo.archiveSupplier(p.id);
                   bumpLedger(ref);
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
-                child: const Text('Create'),
               ),
-              const SizedBox(height: 12),
-            ],
-          ),
+            if (p.archived)
+              ListTile(
+                leading: const Icon(Icons.unarchive_outlined),
+                title: const Text('Unarchive'),
+                onTap: () async {
+                  final repo = await ref.read(entityRepoProvider.future);
+                  await repo.unarchiveSupplier(p.id);
+                  bumpLedger(ref);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                },
+              ),
+          ],
         ),
       ),
     );
   }
 
-  void _showSupplierForm(BuildContext context, WidgetRef ref) {
-    final nameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final taxCtrl = TextEditingController();
-    final bankCtrl = TextEditingController();
-    SupplierCategory? category;
+  void _showSupplierInfo(BuildContext context, Party p) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(p.name),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (p.phone != null) _kv('Phone', p.phone!),
+              if (p.category != null) _kv('Category', p.category!.label),
+              if (p.taxStatus != null) _kv('Tax status', p.taxStatus!),
+              if (p.bankDetails != null) _kv('Bank details', p.bankDetails!),
+              _kv('Archived', p.archived ? 'Yes' : 'No'),
+              _kv('Created', fmtDateTime(p.createdAt)),
+              if (p.archivedAt != null)
+                _kv('Archived at', fmtDateTime(p.archivedAt!)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+                width: 110,
+                child: Text(k,
+                    style: const TextStyle(fontWeight: FontWeight.w600))),
+            Expanded(child: Text(v)),
+          ],
+        ),
+      );
+
+  void _showSupplierForm(BuildContext context, WidgetRef ref,
+      {Party? existing}) {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
+    final taxCtrl = TextEditingController(text: existing?.taxStatus ?? '');
+    final bankCtrl =
+        TextEditingController(text: existing?.bankDetails ?? '');
+    SupplierCategory? category = existing?.category;
 
     showModalBottomSheet<void>(
       context: context,
@@ -225,7 +247,7 @@ class PartiesScreen extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('New Supplier',
+                Text(existing == null ? 'New Supplier' : 'Edit Supplier',
                     style: Theme.of(ctx).textTheme.titleLarge),
                 const SizedBox(height: 16),
                 TextField(
@@ -271,23 +293,29 @@ class PartiesScreen extends ConsumerWidget {
                     final name = nameCtrl.text.trim();
                     if (name.isEmpty) return;
                     final repo = await ref.read(entityRepoProvider.future);
-                    await repo.createSupplier(
-                      name: name,
-                      phone: phoneCtrl.text.trim().isEmpty
-                          ? null
-                          : phoneCtrl.text.trim(),
-                      category: category,
-                      taxStatus: taxCtrl.text.trim().isEmpty
-                          ? null
-                          : taxCtrl.text.trim(),
-                      bankDetails: bankCtrl.text.trim().isEmpty
-                          ? null
-                          : bankCtrl.text.trim(),
-                    );
+                    if (existing == null) {
+                      await repo.createSupplier(
+                        name: name,
+                        phone: phoneCtrl.text,
+                        category: category,
+                        taxStatus: taxCtrl.text,
+                        bankDetails: bankCtrl.text,
+                      );
+                    } else {
+                      await repo.updateSupplierFields(
+                        existing.id,
+                        name: name,
+                        phone: phoneCtrl.text,
+                        category: category,
+                        taxStatus: taxCtrl.text,
+                        bankDetails: bankCtrl.text,
+                      );
+                    }
                     bumpLedger(ref);
                     if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                   },
-                  child: const Text('Create'),
+                  child:
+                      Text(existing == null ? 'Create' : 'Save'),
                 ),
                 const SizedBox(height: 12),
               ],

@@ -14,6 +14,8 @@ class SoloConApp extends ConsumerWidget {
     ref.watch(syncServiceFutureProvider);
     // Cold-boot silent backup (>6h since last).
     ref.watch(backupBootCheckProvider);
+    // Wire every transaction commit to a debounced cloud + Supabase sync.
+    ref.watch(commitSyncWiringProvider);
 
     final mode = ref.watch(themeModeProvider);
 

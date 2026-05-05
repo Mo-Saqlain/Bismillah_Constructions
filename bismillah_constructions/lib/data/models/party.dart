@@ -8,7 +8,7 @@ class Party {
   final String? phone;
   final DateTime createdAt;
 
-  // Customer profile fields
+  // Customer profile fields (legacy — customer entity is being removed)
   final String? ntnCnic;
   final String? address;
   final double? creditLimit;
@@ -17,6 +17,10 @@ class Party {
   final SupplierCategory? category;
   final String? taxStatus;
   final String? bankDetails;
+
+  /// 1 = archived (preserved for audit, hidden from default lists).
+  final int isArchived;
+  final DateTime? archivedAt;
 
   const Party({
     required this.id,
@@ -29,7 +33,11 @@ class Party {
     this.category,
     this.taxStatus,
     this.bankDetails,
+    this.isArchived = 0,
+    this.archivedAt,
   });
+
+  bool get archived => isArchived == 1;
 
   /// Map for INSERT into the `customers` table.
   Map<String, Object?> toCustomerMap() => {
@@ -51,6 +59,8 @@ class Party {
         'category': category?.db,
         'tax_status': taxStatus,
         'bank_details': bankDetails,
+        'is_archived': isArchived,
+        'archived_at': archivedAt?.toUtc().toIso8601String(),
       };
 
   factory Party.fromMap(Map<String, Object?> m) => Party(
@@ -66,5 +76,33 @@ class Party {
             : SupplierCategoryX.fromDb(m['category'] as String),
         taxStatus: m['tax_status'] as String?,
         bankDetails: m['bank_details'] as String?,
+        isArchived: (m['is_archived'] as int?) ?? 0,
+        archivedAt: m['archived_at'] == null
+            ? null
+            : DateTime.parse(m['archived_at'] as String),
+      );
+
+  Party copyWith({
+    String? name,
+    String? phone,
+    SupplierCategory? category,
+    String? taxStatus,
+    String? bankDetails,
+    int? isArchived,
+    DateTime? archivedAt,
+  }) =>
+      Party(
+        id: id,
+        name: name ?? this.name,
+        phone: phone ?? this.phone,
+        createdAt: createdAt,
+        ntnCnic: ntnCnic,
+        address: address,
+        creditLimit: creditLimit,
+        category: category ?? this.category,
+        taxStatus: taxStatus ?? this.taxStatus,
+        bankDetails: bankDetails ?? this.bankDetails,
+        isArchived: isArchived ?? this.isArchived,
+        archivedAt: archivedAt ?? this.archivedAt,
       );
 }

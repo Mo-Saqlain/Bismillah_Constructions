@@ -6,7 +6,11 @@ class Project {
   final ProjectModel model;
   final ProjectStatus status;
   final DateTime createdAt;
-  final String? customerId;
+
+  /// Free-text client name. Replaces the previous customer-FK relation; the
+  /// user explicitly does NOT want a separate Customer / Client entity.
+  final String? clientName;
+
   final String? siteAddress;
   final double? budget;
   final String? projectManager;
@@ -24,7 +28,7 @@ class Project {
     required this.model,
     required this.status,
     required this.createdAt,
-    this.customerId,
+    this.clientName,
     this.siteAddress,
     this.budget,
     this.projectManager,
@@ -41,7 +45,7 @@ class Project {
         'model': model.db,
         'status': status.db,
         'created_at': createdAt.toUtc().toIso8601String(),
-        'customer_id': customerId,
+        'client_name': clientName,
         'site_address': siteAddress,
         'budget': budget,
         'project_manager': projectManager,
@@ -56,7 +60,7 @@ class Project {
         model: ProjectModelX.fromDb(m['model'] as String),
         status: ProjectStatusX.fromDb(m['status'] as String),
         createdAt: DateTime.parse(m['created_at'] as String),
-        customerId: m['customer_id'] as String?,
+        clientName: m['client_name'] as String?,
         siteAddress: m['site_address'] as String?,
         budget: (m['budget'] as num?)?.toDouble(),
         projectManager: m['project_manager'] as String?,
@@ -71,7 +75,7 @@ class Project {
     String? name,
     ProjectModel? model,
     ProjectStatus? status,
-    String? customerId,
+    String? clientName,
     String? siteAddress,
     double? budget,
     String? projectManager,
@@ -85,7 +89,7 @@ class Project {
         model: model ?? this.model,
         status: status ?? this.status,
         createdAt: createdAt,
-        customerId: customerId ?? this.customerId,
+        clientName: clientName ?? this.clientName,
         siteAddress: siteAddress ?? this.siteAddress,
         budget: budget ?? this.budget,
         projectManager: projectManager ?? this.projectManager,

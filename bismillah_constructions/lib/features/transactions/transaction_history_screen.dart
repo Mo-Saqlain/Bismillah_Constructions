@@ -169,20 +169,66 @@ class _TransactionHistoryScreenState
       bool isDeleted) {
     showModalBottomSheet<void>(
       context: context,
-      builder: (_) => SafeArea(
+      builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
             if (!isDeleted)
               ListTile(
-                leading: const Icon(Icons.delete_outline),
-                title: const Text('Soft Delete'),
+                leading: const Icon(Icons.delete_forever, color: Colors.red),
+                title: const Text('Delete (permanent)'),
                 subtitle: const Text(
-                    'Removed from active balance, kept in archive with strikethrough'),
+                    'Removes both ledger rows. Original payload kept in change_log for audit.'),
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  Navigator.pop(sheetCtx);
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Delete this transaction?'),
+                      content: const Text(
+                          'Both rows of this transaction will be removed from the ledger. '
+                          'A copy is preserved in the audit log.'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancel')),
+                        FilledButton(
+                            style: FilledButton.styleFrom(
+                                backgroundColor: Colors.red),
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Delete')),
+                      ],
+                    ),
+                  );
+                  if (confirm != true) return;
+                  final ledger = await ref.read(ledgerRepoProvider.future);
+                  await ledger.hardDeleteTransaction(txnId);
+                  // Force-invalidate the entries providers so the deleted
+                  // row disappears immediately (the ledger version bump alone
+                  // isn't always enough if the parent's selection ref was
+                  // stale).
+                  ref.invalidate(allEntriesProvider);
+                  ref.invalidate(allEntriesIncludingDeletedProvider);
+                  ref.invalidate(recentEntriesProvider);
+                  bumpLedger(ref);
+                  messenger.showSnackBar(
+                      const SnackBar(content: Text('Transaction deleted')));
+                },
+              ),
+            if (!isDeleted)
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Soft delete (keeps audit row visible)'),
+                subtitle: const Text(
+                    'Marks the transaction as deleted but keeps it visible with strikethrough when "Show deleted" is on'),
                 onTap: () async {
                   final ledger = await ref.read(ledgerRepoProvider.future);
                   await ledger.softDeleteTransaction(txnId);
+                  ref.invalidate(allEntriesProvider);
+                  ref.invalidate(allEntriesIncludingDeletedProvider);
+                  ref.invalidate(recentEntriesProvider);
                   bumpLedger(ref);
-                  if (context.mounted) Navigator.pop(context);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
               ),
             if (isDeleted)
@@ -192,8 +238,11 @@ class _TransactionHistoryScreenState
                 onTap: () async {
                   final ledger = await ref.read(ledgerRepoProvider.future);
                   await ledger.restoreTransaction(txnId);
+                  ref.invalidate(allEntriesProvider);
+                  ref.invalidate(allEntriesIncludingDeletedProvider);
+                  ref.invalidate(recentEntriesProvider);
                   bumpLedger(ref);
-                  if (context.mounted) Navigator.pop(context);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
               ),
             if (!isDeleted)
@@ -205,8 +254,10 @@ class _TransactionHistoryScreenState
                 onTap: () async {
                   final ledger = await ref.read(ledgerRepoProvider.future);
                   await ledger.postReversal(txnId);
+                  ref.invalidate(allEntriesProvider);
+                  ref.invalidate(recentEntriesProvider);
                   bumpLedger(ref);
-                  if (context.mounted) Navigator.pop(context);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
               ),
           ],

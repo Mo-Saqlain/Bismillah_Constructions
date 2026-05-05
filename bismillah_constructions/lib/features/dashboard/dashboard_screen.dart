@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
 import '../../core/theme.dart';
+import '../../data/models/bank.dart';
 import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
@@ -16,6 +17,7 @@ class DashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = ref.watch(accountSummaryProvider);
+    final banks = ref.watch(banksProvider);
     final recent = ref.watch(recentEntriesProvider);
     final sync = ref.watch(syncStatusProvider);
 
@@ -64,32 +66,36 @@ class DashboardScreen extends ConsumerWidget {
                     netWorth: s.totalNetWorth,
                   ),
                   const SizedBox(height: 8),
-                  _BalanceCard(
-                    title: 'Liquid Cash',
-                    value: s.liquidCash,
-                    icon: Icons.account_balance,
-                    breakdown: [
-                      ('Cash', s.cash),
-                      ('HBL', s.bankHbl),
-                      ('Meezan', s.bankMeezan),
-                      ('Alfalah', s.bankAlfalah),
-                      ('Supervisor Float', s.supervisorFloat),
-                    ],
+                  AsyncView<List<Bank>>(
+                    value: banks,
+                    data: (banksList) => _BalanceCard(
+                      title: 'Liquid Cash',
+                      value: s.liquidCash,
+                      icon: Icons.account_balance,
+                      breakdown: [
+                        ('Cash', s.cash),
+                        ('Supervisor Float', s.supervisorFloat),
+                        for (final b in banksList)
+                          (b.name, s.bankBalances[b.id] ?? 0),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
-                          child: _StatTile(
-                              label: 'Receivables',
-                              value: s.receivables,
-                              positive: true)),
+                        child: _StatTile(
+                            label: 'Payables',
+                            value: s.payables,
+                            positive: false),
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
-                          child: _StatTile(
-                              label: 'Payables',
-                              value: s.payables,
-                              positive: false)),
+                        child: _StatTile(
+                            label: 'Net Liquidity',
+                            value: s.netLiquidity,
+                            positive: s.netLiquidity >= 0),
+                      ),
                     ],
                   ),
                   if (s.counterReceivables > 0 || s.counterPayables > 0) ...[

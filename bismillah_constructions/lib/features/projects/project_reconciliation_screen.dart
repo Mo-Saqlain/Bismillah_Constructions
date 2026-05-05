@@ -82,7 +82,7 @@ class _ProjectReconciliationScreenState
     final isLabour = p.model == ProjectModel.labourRate;
     final feePct = p.serviceFeePercent ?? 0;
     final serviceFee = isLabour ? outflow * feePct / 100 : 0.0;
-    final businessSavings = isLabour ? 0.0 : (rec.customerInflow - outflow);
+    final businessSavings = isLabour ? 0.0 : (rec.projectInflow - outflow);
 
     return Scaffold(
       appBar: AppBar(title: Text('Reconcile · ${p.name}')),
@@ -108,7 +108,7 @@ class _ProjectReconciliationScreenState
                     child: Text(
                       balanced
                           ? 'Reconciliation passes — safe to archive.'
-                          : 'Reconciliation OFF by ${fmtSignedMoney(rec.imbalance)}. Investigate before archiving.',
+                          : 'Outstanding payables: ${fmtSignedMoney(rec.supplierPayables)}. Settle before archiving.',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -117,23 +117,17 @@ class _ProjectReconciliationScreenState
             ),
           ),
           const SizedBox(height: 8),
-          _SectionTitle(title: 'Reconciliation Equation'),
-          _Row(label: 'Customer Inflow', value: rec.customerInflow),
-          _Row(
-              label: 'Supplier Paid + Payables',
-              value: rec.supplierPaid + rec.supplierPayables),
-          _Row(
-              label: 'Imbalance',
-              value: rec.imbalance,
-              colorize: true),
-          const SizedBox(height: 12),
-          _SectionTitle(title: 'Breakdown'),
-          _Row(label: 'Customer Inflow (billed)', value: rec.customerInflow),
+          _SectionTitle(title: 'Project Cashflows'),
+          _Row(label: 'Received from Project', value: rec.projectInflow),
           _Row(label: 'Supplier Paid', value: rec.supplierPaid),
           _Row(
               label: 'Supplier Payables Outstanding',
               value: rec.supplierPayables,
               colorize: rec.supplierPayables != 0),
+          _Row(
+              label: 'Net (Inflow − Costs)',
+              value: rec.savings,
+              colorize: true),
           const SizedBox(height: 12),
           _SectionTitle(title: 'Profit (${p.model.label})'),
           _Row(label: 'Total Project Outflow', value: outflow),
@@ -163,21 +157,43 @@ class _ProjectReconciliationScreenState
             ),
           ],
           const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _archiving ? null : _archive,
-            icon: const Icon(Icons.archive),
-            label: Text(_archiving ? 'Archiving…' : 'Archive Project'),
-            style: FilledButton.styleFrom(
-              backgroundColor:
-                  balanced ? null : Theme.of(context).colorScheme.error,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Archiving sets is_archived=True. Data is preserved for legal evidence (spec section 3).',
-            style: Theme.of(context).textTheme.bodySmall,
-            textAlign: TextAlign.center,
-          ),
+          // With-Material projects require strict reconciliation:
+          //   Customer_Inflow == Supplier_Paid + Supplier_Payables
+          // Labour-Rate projects are pass-through, so the equation may legitimately
+          // not balance and we don't block the archive.
+          Builder(builder: (_) {
+            final blockArchive = !isLabour && !balanced;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.icon(
+                  onPressed:
+                      _archiving || blockArchive ? null : _archive,
+                  icon: const Icon(Icons.archive),
+                  label: Text(_archiving ? 'Archiving…' : 'Archive Project'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: blockArchive
+                        ? Theme.of(context).colorScheme.error
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  blockArchive
+                      ? 'With-Material project: archive blocked while '
+                          '${fmtSignedMoney(rec.supplierPayables)} of supplier '
+                          'payables are still open. Settle them first.'
+                      : 'Archiving sets is_archived=True. Data is preserved for legal evidence (spec section 3).',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: blockArchive
+                            ? BalanceColors.negative(context)
+                            : null,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            );
+          }),
         ],
       ),
     );

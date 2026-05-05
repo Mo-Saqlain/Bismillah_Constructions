@@ -10,28 +10,20 @@ class Account {
   const Account(this.id, this.name, this.type);
 }
 
+/// System (built-in) accounts. Banks / wallets defined by the user are loaded
+/// at runtime from the `banks` table and joined onto these for the cash-like
+/// list — see [cashLikeAccountsProvider].
 class Accounts {
-  // Assets
+  // Assets — system
   static const cash = Account('CASH', 'Cash', AccountType.asset);
-  static const bankHbl = Account('BANK_HBL', 'Bank — HBL', AccountType.asset);
-  static const bankMeezan =
-      Account('BANK_MEEZAN', 'Bank — Meezan', AccountType.asset);
-  static const bankAlfalah =
-      Account('BANK_ALFALAH', 'Bank — Alfalah', AccountType.asset);
   static const supervisorFloat =
       Account('SUPERVISOR_FLOAT', 'Supervisor Float', AccountType.asset);
   static const externalWallet =
       Account('EXTERNAL_WALLET', 'External Wallet', AccountType.asset);
-  static const clientReceivables =
-      Account('CLIENT_RECV', 'Client Receivables', AccountType.asset);
-  static const counterReceivables =
-      Account('COUNTER_RECV', 'Counter Receivables', AccountType.asset);
 
   // Liabilities
   static const supplierPayables =
       Account('SUPPLIER_PAY', 'Supplier Payables', AccountType.liability);
-  static const counterPayables =
-      Account('COUNTER_PAY', 'Counter Payables', AccountType.liability);
 
   // Income
   static const projectRevenue =
@@ -51,17 +43,12 @@ class Accounts {
   static const ownersEquity =
       Account('OWNERS_EQUITY', "Owner's Equity", AccountType.equity);
 
+  /// All built-in accounts (does not include user-defined banks).
   static const all = <Account>[
     cash,
-    bankHbl,
-    bankMeezan,
-    bankAlfalah,
     supervisorFloat,
     externalWallet,
-    clientReceivables,
-    counterReceivables,
     supplierPayables,
-    counterPayables,
     projectRevenue,
     serviceFeeIncome,
     materialCosts,
@@ -74,27 +61,9 @@ class Accounts {
       all.firstWhere((a) => a.id == id,
           orElse: () => Account(id, id, AccountType.asset));
 
-  /// Cash + Bank + Supervisor Float — accounts the user can pay/receive from.
-  static const cashLikeAccounts = <Account>[
-    cash,
-    bankHbl,
-    bankMeezan,
-    bankAlfalah,
-    supervisorFloat,
-  ];
-
-  /// Bank ledgers only — used for Liquid_Cash dashboard formula.
-  static const bankAccounts = <Account>[
-    bankHbl,
-    bankMeezan,
-    bankAlfalah,
-  ];
-
-  /// Supervisor float buckets — Cash and Supervisor Float per spec.
-  static const supervisorFloatAccounts = <Account>[
-    cash,
-    supervisorFloat,
-  ];
+  /// System cash-like wallets ALWAYS available (Cash + Supervisor Float).
+  /// User-defined banks are appended at runtime via `cashLikeAccountsProvider`.
+  static const systemCashLike = <Account>[cash, supervisorFloat];
 }
 
 enum ProjectModel { withMaterial, labourRate }
@@ -149,7 +118,7 @@ extension CounterEntityTypeX on CounterEntityType {
           orElse: () => CounterEntityType.receivable);
 }
 
-enum MaterialType { brick, cement, sarya, finishing }
+enum MaterialType { brick, cement, sarya, finishing, other }
 
 extension MaterialTypeX on MaterialType {
   String get label => switch (this) {
@@ -157,25 +126,22 @@ extension MaterialTypeX on MaterialType {
         MaterialType.cement => 'Cement',
         MaterialType.sarya => 'Sarya (Steel)',
         MaterialType.finishing => 'Finishing',
+        MaterialType.other => 'Other',
       };
   String get db => name;
-
-  MaterialUnit get defaultUnit => switch (this) {
-        MaterialType.brick => MaterialUnit.pcs,
-        MaterialType.cement => MaterialUnit.bag,
-        MaterialType.sarya => MaterialUnit.kg,
-        MaterialType.finishing => MaterialUnit.piece,
-      };
 
   static MaterialType fromDb(String s) =>
       MaterialType.values.firstWhere((v) => v.name == s,
           orElse: () => MaterialType.cement);
 }
 
-enum MaterialUnit { pcs, bag, kg, piece }
+/// Legacy unit retained for schema compatibility. New entries record `lump`
+/// because the UI only collects a price (quantity goes in the memo).
+enum MaterialUnit { lump, pcs, bag, kg, piece }
 
 extension MaterialUnitX on MaterialUnit {
   String get label => switch (this) {
+        MaterialUnit.lump => 'Lump-sum',
         MaterialUnit.pcs => 'Pcs (count)',
         MaterialUnit.bag => 'Bag',
         MaterialUnit.kg => 'KG',
@@ -184,7 +150,7 @@ extension MaterialUnitX on MaterialUnit {
   String get db => name;
   static MaterialUnit fromDb(String s) =>
       MaterialUnit.values.firstWhere((v) => v.name == s,
-          orElse: () => MaterialUnit.pcs);
+          orElse: () => MaterialUnit.lump);
 }
 
 enum MaterialTxnType { purchase, consumption }
@@ -196,19 +162,15 @@ extension MaterialTxnTypeX on MaterialTxnType {
           orElse: () => MaterialTxnType.purchase);
 }
 
-/// Canonical transaction types.
-///
-/// The original five from spec section 4 plus three new ones for v5.6:
-/// inter-wallet transfer, personal/daily draw, and service fee.
+/// Canonical transaction types — money flows in or out of a project.
 enum TxnKind {
-  materialBuy,     // Dr Material Costs / Cr Supplier Payables
-  labourPayment,   // Dr Labour Costs / Cr Cash|Bank  (mandatory provider)
-  supplierPay,     // Dr Supplier Payables / Cr Cash|Bank
-  clientBilling,   // Dr Client Receivables / Cr Project Revenue
-  receivePayment,  // Dr Cash|Bank / Cr Client Receivables
-  walletTransfer,  // Dr destination wallet / Cr source wallet
-  personalDraw,    // Dr Personal Draw / Cr Cash|Bank (does NOT touch payables)
-  serviceFee,      // Dr Cash|Bank / Cr Service Fee Income (labour-rate model)
+  materialBuy,         // Dr Material Costs / Cr Supplier Payables (project mandatory)
+  labourPayment,       // Dr Labour Costs / Cr Cash|Bank  (project mandatory)
+  supplierPay,         // Dr Supplier Payables / Cr Cash|Bank
+  receiveFromProject,  // Dr Cash|Bank / Cr Project Revenue (direct receipt — no receivable phase)
+  walletTransfer,      // Dr destination wallet / Cr source wallet
+  personalDraw,        // Dr Personal Draw / Cr Cash|Bank (does NOT touch payables)
+  serviceFee,          // Dr Cash|Bank / Cr Service Fee Income (labour-rate model)
 }
 
 extension TxnKindX on TxnKind {
@@ -216,23 +178,21 @@ extension TxnKindX on TxnKind {
         TxnKind.materialBuy => 'Material Buy (Credit)',
         TxnKind.labourPayment => 'Labour Payment',
         TxnKind.supplierPay => 'Supplier Payment',
-        TxnKind.clientBilling => 'Client Billing',
-        TxnKind.receivePayment => 'Receive Payment',
+        TxnKind.receiveFromProject => 'Receive from Project',
         TxnKind.walletTransfer => 'Wallet Transfer',
         TxnKind.personalDraw => 'Personal / Daily Draw',
         TxnKind.serviceFee => 'Service Fee Logged',
       };
   String get blurb => switch (this) {
-        TxnKind.materialBuy => 'Buy material on credit from a supplier',
+        TxnKind.materialBuy =>
+          'Buy material on credit from a supplier (project required)',
         TxnKind.labourPayment =>
-          'Pay a labour provider for a project (cash or bank)',
+          'Pay a labour provider for a project (project required)',
         TxnKind.supplierPay => 'Settle a supplier payable from cash or bank',
-        TxnKind.clientBilling =>
-          'Bill a customer for a project (creates receivable)',
-        TxnKind.receivePayment =>
-          'Receive payment from a customer into cash or bank',
+        TxnKind.receiveFromProject =>
+          'Receive money from the project — booked as project revenue',
         TxnKind.walletTransfer =>
-          'Move cash between bank/cash/supervisor wallets',
+          'Move cash between bank / cash / supervisor wallets',
         TxnKind.personalDraw =>
           'Daily / personal expense — keeps payables intact',
         TxnKind.serviceFee =>
@@ -261,6 +221,8 @@ extension ChangeActionX on ChangeAction {
 class SettingsKeys {
   static const themeMode = 'theme_mode'; // 'light' | 'dark' | 'system'
   static const lastBackupAt = 'last_backup_at';
+  static const lastCloudBackupAt = 'last_cloud_backup_at';
+  static const deviceId = 'device_id';
 }
 
 class SupabaseConfig {
@@ -268,4 +230,34 @@ class SupabaseConfig {
   static const anonKey =
       String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
   static bool get configured => url.isNotEmpty && anonKey.isNotEmpty;
+}
+
+/// Hardcoded MongoDB connection for online backup.
+///
+/// **Setup**:
+///  1. Sign in to https://cloud.mongodb.com (free M0 tier is enough).
+///  2. Build a Database → choose M0 → pick a region → create cluster.
+///  3. Database Access → Add new database user → username + password (save these).
+///  4. Network Access → Add IP Address → "Allow access from anywhere" (0.0.0.0/0)
+///     for development, or your specific IP for production.
+///  5. Connect → Drivers → Dart → copy the `mongodb+srv://...` URI.
+///  6. Replace [_uri] below with that URI (substitute the placeholder password).
+///
+/// You can also override at build/run time:
+///   `flutter run --dart-define=MONGO_URI=mongodb+srv://user:pass@cluster.../`
+class MongoConfig {
+  /// PASTE YOUR ATLAS URI HERE. Leave the trailing `/<dbname>` off — the code
+  /// appends [dbName] for you.
+  static const _uri =
+      'mongodb+srv://USER:PASS@cluster0.mongodb.net/';
+
+  static const uri =
+      String.fromEnvironment('MONGO_URI', defaultValue: _uri);
+  static const dbName = 'bismillah_erp';
+
+  /// True when the URI looks real (i.e., not the placeholder). Used by the
+  /// service to silently skip uploads on a fresh checkout that hasn't been
+  /// configured yet.
+  static bool get configured =>
+      uri.isNotEmpty && !uri.contains('USER:PASS');
 }

@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
 import '../../core/formatters.dart';
-import '../../data/models/party.dart';
+import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import 'project_reconciliation_screen.dart';
@@ -96,6 +96,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                     children: [
                       Text('${p.model.label} · ${p.status.label}'
                           '${p.archived ? ' · ARCHIVED' : ''}'),
+                      if (p.clientName != null)
+                        Text('Client: ${p.clientName}',
+                            style: const TextStyle(fontSize: 12)),
                       if (p.siteAddress != null)
                         Text(p.siteAddress!,
                             style: const TextStyle(fontSize: 12)),
@@ -126,9 +129,26 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   void _showProjectActions(BuildContext context, WidgetRef ref, project) {
     showModalBottomSheet<void>(
       context: context,
-      builder: (_) => SafeArea(
+      builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('View info'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _showProjectInfo(context, project);
+              },
+            ),
+            if (!project.archived)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit'),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _showProjectEditForm(context, ref, project);
+                },
+              ),
             if (!project.archived)
               ListTile(
                 leading: Icon(project.status == ProjectStatus.active
@@ -145,7 +165,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                           ? ProjectStatus.closed
                           : ProjectStatus.active);
                   bumpLedger(ref);
-                  if (context.mounted) Navigator.pop(context);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
               ),
             if (!project.archived)
@@ -155,7 +175,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 subtitle: const Text(
                     'Run reconciliation check, then archive (preserves data)'),
                 onTap: () {
-                  Navigator.pop(context);
+                  Navigator.pop(sheetCtx);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -173,7 +193,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                   final repo = await ref.read(entityRepoProvider.future);
                   await repo.unarchiveProject(project.id);
                   bumpLedger(ref);
-                  if (context.mounted) Navigator.pop(context);
+                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
               ),
           ],
@@ -181,16 +201,69 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       ),
     );
   }
+
+  void _showProjectInfo(BuildContext context, project) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(project.name),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _kv('Model', project.model.label),
+              _kv('Status', project.status.label),
+              _kv('Archived', project.archived ? 'Yes' : 'No'),
+              if (project.clientName != null)
+                _kv('Client', project.clientName!),
+              if (project.siteAddress != null)
+                _kv('Site', project.siteAddress!),
+              if (project.budget != null)
+                _kv('Budget', fmtMoney(project.budget!)),
+              if (project.projectManager != null)
+                _kv('Manager', project.projectManager!),
+              if (project.serviceFeePercent != null)
+                _kv('Service Fee',
+                    '${project.serviceFeePercent!.toStringAsFixed(2)} %'),
+              _kv('Created', fmtDateTime(project.createdAt)),
+              if (project.archivedAt != null)
+                _kv('Archived at', fmtDateTime(project.archivedAt!)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+                width: 110,
+                child: Text(k,
+                    style: const TextStyle(fontWeight: FontWeight.w600))),
+            Expanded(child: Text(v)),
+          ],
+        ),
+      );
 }
 
 void _showProjectForm(BuildContext context, WidgetRef ref) {
   final nameCtrl = TextEditingController();
+  final clientCtrl = TextEditingController();
   final siteCtrl = TextEditingController();
   final budgetCtrl = TextEditingController();
   final managerCtrl = TextEditingController();
   final serviceFeeCtrl = TextEditingController();
   ProjectModel model = ProjectModel.withMaterial;
-  String? customerId;
 
   showModalBottomSheet<void>(
     context: context,
@@ -204,7 +277,6 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
       ),
       child: StatefulBuilder(
         builder: (ctx, setSheetState) {
-          final customers = ref.watch(customersProvider);
           return SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -231,18 +303,13 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                   onChanged: (v) => setSheetState(() => model = v ?? model),
                 ),
                 const SizedBox(height: 12),
-                AsyncView<List<Party>>(
-                  value: customers,
-                  data: (list) => DropdownButtonFormField<String>(
-                    initialValue: customerId,
-                    decoration: const InputDecoration(
-                        labelText: 'Customer (required)'),
-                    items: list
-                        .map((c) => DropdownMenuItem(
-                            value: c.id, child: Text(c.name)))
-                        .toList(),
-                    onChanged: (v) => setSheetState(() => customerId = v),
-                  ),
+                TextField(
+                  controller: clientCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Client name (optional)',
+                      helperText:
+                          'Free text — there is no separate client/customer entity'),
+                  textCapitalization: TextCapitalization.words,
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -296,7 +363,9 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                     await repo.createProject(
                       name: name,
                       model: model,
-                      customerId: customerId,
+                      clientName: clientCtrl.text.trim().isEmpty
+                          ? null
+                          : clientCtrl.text.trim(),
                       siteAddress: siteCtrl.text.trim().isEmpty
                           ? null
                           : siteCtrl.text.trim(),
@@ -318,6 +387,127 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
             ),
           );
         },
+      ),
+    ),
+  );
+}
+
+/// Edit-form variant of [_showProjectForm] — prefilled from `existing` and
+/// hits [EntityRepository.updateProjectFields] instead of `createProject`.
+void _showProjectEditForm(
+    BuildContext context, WidgetRef ref, Project existing) {
+  final nameCtrl = TextEditingController(text: existing.name);
+  final clientCtrl = TextEditingController(text: existing.clientName ?? '');
+  final siteCtrl = TextEditingController(text: existing.siteAddress ?? '');
+  final budgetCtrl =
+      TextEditingController(text: existing.budget?.toString() ?? '');
+  final managerCtrl =
+      TextEditingController(text: existing.projectManager ?? '');
+  final serviceFeeCtrl = TextEditingController(
+      text: existing.serviceFeePercent?.toString() ?? '');
+
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (sheetCtx) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(sheetCtx).viewInsets.bottom,
+        left: 16,
+        right: 16,
+        top: 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Edit Project',
+                style: Theme.of(sheetCtx).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+                'Model (${existing.model.label}) is fixed once a project '
+                'is created — change other fields freely.',
+                style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: nameCtrl,
+              autofocus: true,
+              decoration:
+                  const InputDecoration(labelText: 'Project name *'),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: clientCtrl,
+              decoration:
+                  const InputDecoration(labelText: 'Client name (optional)'),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: siteCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Site address (optional)'),
+              textCapitalization: TextCapitalization.sentences,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: budgetCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Budget (optional)', prefixText: 'Rs '),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: managerCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Project manager (optional)'),
+              textCapitalization: TextCapitalization.words,
+            ),
+            if (existing.model == ProjectModel.labourRate) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: serviceFeeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Service Fee % (Labour-Rate model)',
+                  suffixText: '%',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                ],
+              ),
+            ],
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                final repo = await ref.read(entityRepoProvider.future);
+                await repo.updateProjectFields(
+                  existing.id,
+                  name: name,
+                  clientName: clientCtrl.text,
+                  siteAddress: siteCtrl.text,
+                  budget: double.tryParse(budgetCtrl.text),
+                  projectManager: managerCtrl.text,
+                  serviceFeePercent: existing.model == ProjectModel.labourRate
+                      ? double.tryParse(serviceFeeCtrl.text)
+                      : null,
+                );
+                bumpLedger(ref);
+                if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+              },
+              child: const Text('Save'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
     ),
   );

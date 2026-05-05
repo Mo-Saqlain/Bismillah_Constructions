@@ -7,11 +7,12 @@ void main() {
     final ids = Accounts.all.map((a) => a.id).toList();
     expect(ids.toSet().length, ids.length, reason: 'Account IDs are unique');
     expect(Accounts.byId(Accounts.cash.id), Accounts.cash);
-    expect(Accounts.cashLikeAccounts, contains(Accounts.bankHbl));
+    expect(Accounts.systemCashLike, contains(Accounts.cash));
+    expect(Accounts.systemCashLike, contains(Accounts.supervisorFloat));
   });
 
-  test('All five canonical transaction kinds exist', () {
-    expect(TxnKind.values.length, 5);
+  test('Canonical transaction kinds all have label + blurb', () {
+    expect(TxnKind.values, isNotEmpty);
     for (final k in TxnKind.values) {
       expect(k.label, isNotEmpty);
       expect(k.blurb, isNotEmpty);

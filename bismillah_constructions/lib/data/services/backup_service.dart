@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -7,13 +8,18 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/constants.dart';
 import '../db/local_db.dart';
 import '../repositories/entity_repository.dart';
+import 'mongo_backup_service.dart';
 
 /// Backs up the SQLite database to a user-visible Documents folder so the
 /// data survives app uninstall (Android: external Documents). Trigger:
 /// silent on cold-boot if last backup is older than 6 hours (spec section 5).
+///
+/// When a [MongoBackupService] is attached, every successful local backup is
+/// also pushed to the cloud (best-effort — never blocks or fails the local op).
 class BackupService {
-  BackupService(this._entityRepo);
+  BackupService(this._entityRepo, {MongoBackupService? cloud}) : _cloud = cloud;
   final EntityRepository _entityRepo;
+  final MongoBackupService? _cloud;
 
   static const _folderName = 'Bismillah_Backups';
   static const _backupInterval = Duration(hours: 6);
@@ -56,6 +62,12 @@ class BackupService {
         SettingsKeys.lastBackupAt,
         DateTime.now().toUtc().toIso8601String(),
       );
+
+      // Best-effort cloud push: never block or fail the local backup result.
+      final cloud = _cloud;
+      if (cloud != null) {
+        unawaited(cloud.uploadLatestIfDue());
+      }
       return true;
     } catch (_) {
       return false;

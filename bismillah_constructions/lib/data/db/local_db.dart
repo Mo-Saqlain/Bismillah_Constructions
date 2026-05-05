@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -7,6 +8,12 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 class LocalDb {
   LocalDb._();
   static final LocalDb instance = LocalDb._();
+
+  /// Test-only: applies the latest schema to an open db. Real callers go
+  /// through [open], which routes through [_onCreate] / [_onUpgrade] like
+  /// normal.
+  @visibleForTesting
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 6);
 
   Database? _db;
   String? _dbPath;
@@ -34,7 +41,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 6,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -66,6 +73,8 @@ class LocalDb {
         category TEXT,
         tax_status TEXT,
         bank_details TEXT,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -75,6 +84,8 @@ class LocalDb {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         account_no TEXT,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -95,15 +106,15 @@ class LocalDb {
         name TEXT NOT NULL,
         model TEXT NOT NULL,
         status TEXT NOT NULL,
-        customer_id TEXT,
+        customer_id TEXT,                      -- legacy, kept for migration
+        client_name TEXT,                      -- v5: free-text client (replaces customer fk)
         site_address TEXT,
         budget REAL,
         project_manager TEXT,
         service_fee_percent REAL,
         is_archived INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (customer_id) REFERENCES customers(id)
+        created_at TEXT NOT NULL
       )
     ''');
 
@@ -152,6 +163,7 @@ class LocalDb {
         original_data TEXT,
         new_data TEXT,
         note TEXT,
+        device_id TEXT,
         timestamp TEXT NOT NULL
       )
     ''');
@@ -234,6 +246,62 @@ class LocalDb {
           created_at TEXT NOT NULL
         )
       ''');
+    }
+
+    if (oldVersion < 4) {
+      // v4: device_id on change_log so audits identify the writing install.
+      try {
+        await db.execute('ALTER TABLE change_log ADD COLUMN device_id TEXT');
+      } catch (_) {/* column may already exist on fresh installs */}
+    }
+
+    if (oldVersion < 6) {
+      // v6: archival on suppliers + banks (parity with projects). Keeps the
+      // ledger history intact while hiding the row from default lists.
+      for (final table in const ['suppliers', 'banks']) {
+        try {
+          await db.execute(
+              'ALTER TABLE $table ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0');
+        } catch (_) {/* may already exist */}
+        try {
+          await db.execute('ALTER TABLE $table ADD COLUMN archived_at TEXT');
+        } catch (_) {/* may already exist */}
+      }
+    }
+
+    if (oldVersion < 5) {
+      // v5: free-text `client_name` on projects (replaces the customer FK
+      // for the user's flow). Banks become user-defined accounts — seed the
+      // legacy hardcoded bank ids into the `banks` table when they are
+      // referenced by existing journal_entries so old data keeps a
+      // human-readable label.
+      try {
+        await db.execute('ALTER TABLE projects ADD COLUMN client_name TEXT');
+      } catch (_) {/* may already exist */}
+
+      const seeds = <Map<String, String>>[
+        {'id': 'BANK_HBL', 'name': 'Bank — HBL'},
+        {'id': 'BANK_MEEZAN', 'name': 'Bank — Meezan'},
+        {'id': 'BANK_ALFALAH', 'name': 'Bank — Alfalah'},
+      ];
+      for (final s in seeds) {
+        final hits = await db.rawQuery(
+          'SELECT 1 FROM journal_entries WHERE account_id = ? LIMIT 1',
+          [s['id']],
+        );
+        if (hits.isNotEmpty) {
+          await db.insert(
+            'banks',
+            {
+              'id': s['id'],
+              'name': s['name'],
+              'account_no': null,
+              'created_at': DateTime.now().toUtc().toIso8601String(),
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+        }
+      }
     }
 
     if (oldVersion < 3) {

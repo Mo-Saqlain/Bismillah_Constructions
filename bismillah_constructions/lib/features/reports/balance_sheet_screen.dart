@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/formatters.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
-import 'pdf_generator.dart';
+import 'csv_export.dart';
 
 class BalanceSheetScreen extends ConsumerWidget {
   const BalanceSheetScreen({super.key});
@@ -12,6 +12,7 @@ class BalanceSheetScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = ref.watch(accountSummaryProvider);
+    final banks = ref.watch(banksProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Balance Sheet')),
       body: AsyncView(
@@ -32,9 +33,19 @@ class BalanceSheetScreen extends ConsumerWidget {
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 6),
                       _row('Cash', s.cash),
-                      _row('Bank — HBL', s.bankHbl),
-                      _row('Bank — Meezan', s.bankMeezan),
-                      _row('Client Receivables', s.receivables),
+                      _row('Supervisor Float', s.supervisorFloat),
+                      AsyncView(
+                        value: banks,
+                        data: (list) => Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final b in list)
+                              _row(b.name, s.bankBalances[b.id] ?? 0),
+                          ],
+                        ),
+                      ),
+                      if (s.counterReceivables > 0)
+                        _row('Counter Receivables', s.counterReceivables),
                       const Divider(),
                       _row('Total Assets', s.assets, bold: true),
                     ],
@@ -51,7 +62,9 @@ class BalanceSheetScreen extends ConsumerWidget {
                       Text('Liabilities & Equity',
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 6),
-                      _row('Supplier Payables', s.liabilities),
+                      _row('Supplier Payables', s.payables),
+                      if (s.counterPayables > 0)
+                        _row('Counter Payables', s.counterPayables),
                       _row("Owner's Equity (derived)", s.equity),
                       const Divider(),
                       _row('Total Liabilities + Equity', liabPlusEquity,
@@ -101,19 +114,39 @@ class BalanceSheetScreen extends ConsumerWidget {
                 ),
               const SizedBox(height: 16),
               FilledButton.icon(
-                icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Export as PDF'),
-                onPressed: () => PdfGenerator.previewBalanceSheet(
-                  BalanceSheetData(
-                    cash: s.cash,
-                    bankHbl: s.bankHbl,
-                    bankMeezan: s.bankMeezan,
-                    receivables: s.receivables,
-                    payables: s.liabilities,
-                    equity: s.equity,
-                    generatedAt: DateTime.now(),
-                  ),
-                ),
+                icon: const Icon(Icons.file_download),
+                label: const Text('Export CSV'),
+                onPressed: () async {
+                  final list = await ref.read(banksProvider.future);
+                  final csv = CsvExport.build(
+                    headers: ['Line', 'Amount'],
+                    rows: [
+                      ['Cash', s.cash.toStringAsFixed(2)],
+                      ['Supervisor Float',
+                          s.supervisorFloat.toStringAsFixed(2)],
+                      for (final b in list)
+                        [b.name,
+                            (s.bankBalances[b.id] ?? 0).toStringAsFixed(2)],
+                      if (s.counterReceivables > 0)
+                        ['Counter Receivables',
+                            s.counterReceivables.toStringAsFixed(2)],
+                      ['Total Assets', s.assets.toStringAsFixed(2)],
+                      ['Supplier Payables', s.payables.toStringAsFixed(2)],
+                      if (s.counterPayables > 0)
+                        ['Counter Payables',
+                            s.counterPayables.toStringAsFixed(2)],
+                      ["Owner's Equity", s.equity.toStringAsFixed(2)],
+                      ['Total Liabilities + Equity',
+                          liabPlusEquity.toStringAsFixed(2)],
+                    ],
+                  );
+                  await CsvExport.share(
+                    fileName:
+                        'balance_sheet_${DateTime.now().millisecondsSinceEpoch}',
+                    csv: csv,
+                    subject: 'Balance Sheet',
+                  );
+                },
               ),
             ],
           );

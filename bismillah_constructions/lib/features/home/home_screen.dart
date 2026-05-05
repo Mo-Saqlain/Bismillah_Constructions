@@ -15,11 +15,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
 
+  // 4 destinations: Home (Dashboard), Projects, Suppliers, Reports.
+  // Customers were removed entirely (the client is just a text field on the
+  // project). Banks/wallets are managed inside Settings.
   static const _tabs = <Widget>[
     DashboardScreen(),
     ProjectsScreen(),
-    PartiesScreen(kind: PartyKind.customer),
-    PartiesScreen(kind: PartyKind.supplier),
+    SuppliersScreen(),
     ReportsScreen(),
   ];
 
@@ -39,10 +41,6 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: Icon(Icons.foundation_outlined),
               selectedIcon: Icon(Icons.foundation),
               label: 'Projects'),
-          NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: 'Customers'),
           NavigationDestination(
               icon: Icon(Icons.local_shipping_outlined),
               selectedIcon: Icon(Icons.local_shipping),

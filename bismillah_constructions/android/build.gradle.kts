@@ -5,10 +5,17 @@ allprojects {
     }
 }
 
-val newBuildDir: Directory =
-    rootProject.layout.buildDirectory
-        .dir("../../build")
-        .get()
+// Redirect Gradle output OUT of OneDrive — OneDrive holds file locks while
+// syncing, which breaks tasks like `mergeReleaseNativeLibs`. Set the env var
+// `BISMILLAH_BUILD_DIR` to an absolute path outside OneDrive (e.g.
+// C:\bismillah-build) before invoking `flutter build apk`.
+val externalBuild: String? = System.getenv("BISMILLAH_BUILD_DIR")
+val newBuildDir: Directory = if (externalBuild != null) {
+    val abs = java.io.File(externalBuild).apply { mkdirs() }
+    objects.directoryProperty().apply { set(abs) }.get()
+} else {
+    rootProject.layout.buildDirectory.dir("../../build").get()
+}
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {

@@ -9,6 +9,7 @@ class ChangeLog {
   final String? originalData;
   final String? newData;
   final String? note;
+  final String? deviceId;
   final DateTime timestamp;
 
   const ChangeLog({
@@ -19,6 +20,7 @@ class ChangeLog {
     this.originalData,
     this.newData,
     this.note,
+    this.deviceId,
     required this.timestamp,
   });
 
@@ -30,6 +32,7 @@ class ChangeLog {
         'original_data': originalData,
         'new_data': newData,
         'note': note,
+        'device_id': deviceId,
         'timestamp': timestamp.toUtc().toIso8601String(),
       };
 
@@ -41,6 +44,7 @@ class ChangeLog {
         originalData: m['original_data'] as String?,
         newData: m['new_data'] as String?,
         note: m['note'] as String?,
+        deviceId: m['device_id'] as String?,
         timestamp: DateTime.parse(m['timestamp'] as String),
       );
 }

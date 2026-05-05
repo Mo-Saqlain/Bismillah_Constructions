@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sqflite/sqflite.dart';
@@ -13,6 +15,7 @@ import '../data/models/project.dart';
 import '../data/repositories/entity_repository.dart';
 import '../data/repositories/ledger_repository.dart';
 import '../data/services/backup_service.dart';
+import '../data/services/mongo_backup_service.dart';
 import '../data/sync/sync_service.dart';
 
 final ledgerVersionProvider = StateProvider<int>((_) => 0);
@@ -49,15 +52,49 @@ final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
   yield* svc.status;
 });
 
+final mongoBackupServiceProvider =
+    FutureProvider<MongoBackupService>((ref) async {
+  final repo = await ref.watch(entityRepoProvider.future);
+  final svc = MongoBackupService(repo);
+  ref.onDispose(svc.dispose);
+  svc.start();
+  return svc;
+});
+
+final cloudBackupStatusProvider =
+    StreamProvider<CloudBackupStatus>((ref) async* {
+  final svc = await ref.watch(mongoBackupServiceProvider.future);
+  yield CloudBackupStatus.initial;
+  yield* svc.status;
+});
+
 final backupServiceProvider = FutureProvider<BackupService>((ref) async {
   final repo = await ref.watch(entityRepoProvider.future);
-  return BackupService(repo);
+  final cloud = await ref.watch(mongoBackupServiceProvider.future);
+  return BackupService(repo, cloud: cloud);
 });
 
 /// Trigger a silent backup once on app boot when older than 6 hours.
 final backupBootCheckProvider = FutureProvider<void>((ref) async {
   final svc = await ref.watch(backupServiceProvider.future);
   await svc.maybeRunSilentBackup();
+});
+
+/// Wires every successful ledger commit to a debounced cloud upload + a
+/// Supabase row push. Watched once at app boot so the listeners stay alive
+/// for the lifetime of the app.
+final commitSyncWiringProvider = FutureProvider<void>((ref) async {
+  final ledger = await ref.watch(ledgerRepoProvider.future);
+  final cloud = await ref.watch(mongoBackupServiceProvider.future);
+  final sync = await ref.watch(syncServiceFutureProvider.future);
+
+  void onCommit() {
+    cloud.scheduleUpload();
+    unawaited(sync.syncNow());
+  }
+
+  ledger.addCommitListener(onCommit);
+  ref.onDispose(() => ledger.removeCommitListener(onCommit));
 });
 
 // ---- Theme ----
@@ -109,22 +146,42 @@ final archivedProjectsProvider = FutureProvider<List<Project>>((ref) async {
   return repo.archivedProjects();
 });
 
-final customersProvider = FutureProvider<List<Party>>((ref) async {
-  ref.watch(ledgerVersionProvider);
-  final repo = await ref.watch(entityRepoProvider.future);
-  return repo.customers();
-});
-
 final suppliersProvider = FutureProvider<List<Party>>((ref) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);
   return repo.suppliers();
 });
 
+final archivedSuppliersProvider = FutureProvider<List<Party>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedSuppliers();
+});
+
 final banksProvider = FutureProvider<List<Bank>>((ref) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);
   return repo.banks();
+});
+
+final archivedBanksProvider = FutureProvider<List<Bank>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedBanks();
+});
+
+/// Cash-like accounts for the transaction form / dashboard.
+/// Combines the system Cash + Supervisor Float with every user-defined bank.
+final cashLikeAccountsProvider =
+    FutureProvider<List<Account>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final banks = await ref.watch(banksProvider.future);
+  return [
+    ...Accounts.systemCashLike,
+    ...banks.map(
+      (b) => Account(b.id, b.name, AccountType.asset),
+    ),
+  ];
 });
 
 final counterEntitiesProvider =
@@ -164,28 +221,32 @@ final changeLogProvider = FutureProvider<List<ChangeLog>>((ref) async {
 // ---- Account summary ----
 
 class AccountSummary {
+  /// System cash (Cash account).
   final double cash;
-  final double bankHbl;
-  final double bankMeezan;
-  final double bankAlfalah;
+
+  /// Supervisor Float account.
   final double supervisorFloat;
-  final double receivables;
+
+  /// Per user-defined bank balance, keyed by bank id. The bank's display name
+  /// is on the corresponding [Bank] row.
+  final Map<String, double> bankBalances;
+
+  /// Outstanding supplier payables (credits − debits).
   final double payables;
+
   final double materialCosts;
   final double labourCosts;
   final double revenue;
   final double serviceFeeIncome;
   final double personalDraw;
+
   final double counterReceivables;
   final double counterPayables;
 
   const AccountSummary({
     required this.cash,
-    required this.bankHbl,
-    required this.bankMeezan,
-    required this.bankAlfalah,
     required this.supervisorFloat,
-    required this.receivables,
+    required this.bankBalances,
     required this.payables,
     required this.materialCosts,
     required this.labourCosts,
@@ -196,24 +257,22 @@ class AccountSummary {
     required this.counterPayables,
   });
 
-  /// Bank ledgers + supervisor float (spec section 6).
-  double get liquidCash =>
-      bankHbl + bankMeezan + bankAlfalah + cash + supervisorFloat;
+  double get totalBanks =>
+      bankBalances.values.fold<double>(0, (a, b) => a + b);
 
-  double get totalCashAndBank => liquidCash;
+  /// Cash + Supervisor Float + every user-defined bank.
+  double get liquidCash => cash + supervisorFloat + totalBanks;
 
-  /// Spec section 6: Liquid_Cash - Total_Supplier_Payables.
+  /// Spec section 6: Liquid_Cash − Total_Supplier_Payables.
   double get netLiquidity => liquidCash - payables;
 
-  double get assets => liquidCash + receivables + counterReceivables;
+  double get assets => liquidCash + counterReceivables;
   double get liabilities => payables + counterPayables;
   double get netProfit =>
       revenue + serviceFeeIncome - (materialCosts + labourCosts + personalDraw);
   double get equity => assets - liabilities;
 
-  double get netPosition =>
-      (receivables + counterReceivables) - (payables + counterPayables);
-
+  double get netPosition => counterReceivables - (payables + counterPayables);
   double get totalNetWorth => liquidCash + netPosition;
 }
 
@@ -221,17 +280,14 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(ledgerRepoProvider.future);
   final entityRepo = await ref.watch(entityRepoProvider.future);
+  final banks = await ref.watch(banksProvider.future);
 
   Future<double> dr(String id) => repo.accountBalance(id);
   Future<double> cr(String id) => repo.creditBalance(id);
 
-  final results = await Future.wait([
+  final fixed = await Future.wait([
     dr(Accounts.cash.id),
-    dr(Accounts.bankHbl.id),
-    dr(Accounts.bankMeezan.id),
-    dr(Accounts.bankAlfalah.id),
     dr(Accounts.supervisorFloat.id),
-    dr(Accounts.clientReceivables.id),
     cr(Accounts.supplierPayables.id),
     dr(Accounts.materialCosts.id),
     dr(Accounts.labourCosts.id),
@@ -239,6 +295,10 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
     cr(Accounts.serviceFeeIncome.id),
     dr(Accounts.personalDraw.id),
   ]);
+
+  final bankBalances = <String, double>{
+    for (final b in banks) b.id: await dr(b.id),
+  };
 
   final entities = await entityRepo.counterEntities();
   final counterRecv = entities
@@ -249,18 +309,15 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
       .fold<double>(0, (s, e) => s + e.amount);
 
   return AccountSummary(
-    cash: results[0],
-    bankHbl: results[1],
-    bankMeezan: results[2],
-    bankAlfalah: results[3],
-    supervisorFloat: results[4],
-    receivables: results[5],
-    payables: results[6],
-    materialCosts: results[7],
-    labourCosts: results[8],
-    revenue: results[9],
-    serviceFeeIncome: results[10],
-    personalDraw: results[11],
+    cash: fixed[0],
+    supervisorFloat: fixed[1],
+    bankBalances: bankBalances,
+    payables: fixed[2],
+    materialCosts: fixed[3],
+    labourCosts: fixed[4],
+    revenue: fixed[5],
+    serviceFeeIncome: fixed[6],
+    personalDraw: fixed[7],
     counterReceivables: counterRecv,
     counterPayables: counterPay,
   );
