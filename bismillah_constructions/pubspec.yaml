@@ -1,0 +1,46 @@
+name: bismillah_constructions
+description: "Solo-Con ERP — offline-first double-entry ledger for construction projects."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Local DB (offline-first)
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Remote DB (sync target)
+  supabase_flutter: ^2.5.6
+
+  # Connectivity for sync trigger
+  connectivity_plus: ^6.0.3
+
+  # Utilities
+  uuid: ^4.4.0
+  intl: ^0.19.0
+  collection: ^1.18.0
+
+  # PDF reports
+  pdf: ^3.11.0
+  printing: ^5.13.0
+  share_plus: ^9.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
