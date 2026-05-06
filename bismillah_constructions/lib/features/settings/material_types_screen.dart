@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/models/material_type_def.dart';
@@ -6,45 +7,56 @@ import '../../providers/providers.dart';
 import '../common/async_view.dart';
 
 /// Lets the user manage the categories that appear in the Buy Material
-/// transaction form.
+/// transaction form, plus their procurement metadata (UOM, coverage rate,
+/// waste factor, lead time, physical dimensions).
 ///
 /// Built-in rows (the original five seeded by the v7 migration) can be
-/// renamed but not deleted — historical inventory references their label
-/// and we don't want a dropdown that silently drops legacy data. Custom
-/// rows the user adds are fully removable.
+/// renamed and have their metadata edited but cannot be deleted —
+/// historical inventory references their label and we don't want a
+/// dropdown that silently drops legacy data.
 class MaterialTypesScreen extends ConsumerWidget {
   const MaterialTypesScreen({super.key});
 
-  Future<void> _add(BuildContext context, WidgetRef ref) async {
+  Future<void> _addOrEdit(
+      BuildContext context, WidgetRef ref, MaterialTypeDef? existing) async {
     final messenger = ScaffoldMessenger.of(context);
-    final name = await showDialog<String>(
+    final result = await showModalBottomSheet<MaterialTypeDef>(
       context: context,
-      builder: (_) => const _NameDialog(title: 'New material type'),
+      isScrollControlled: true,
+      builder: (_) => _MaterialTypeForm(initial: existing),
     );
-    if (name == null || name.trim().isEmpty) return;
+    if (result == null) return;
+    final repo = await ref.read(entityRepoProvider.future);
     try {
-      final repo = await ref.read(entityRepoProvider.future);
-      await repo.addMaterialType(name);
+      if (existing == null) {
+        await repo.addMaterialType(
+          result.name,
+          uomType: result.uomType,
+          uom: result.uom,
+          coverageRate: result.coverageRate,
+          wasteFactor: result.wasteFactor,
+          leadDays: result.leadDays,
+          dims: result.dims,
+        );
+      } else {
+        await repo.updateMaterialType(
+          existing.id,
+          name: result.name,
+          uomType: result.uomType,
+          uom: result.uom,
+          coverageRate: result.coverageRate,
+          wasteFactor: result.wasteFactor,
+          leadDays: result.leadDays,
+          dims: result.dims,
+        );
+      }
       bumpLedger(ref);
-      messenger.showSnackBar(SnackBar(content: Text('Added "$name".')));
+      messenger.showSnackBar(SnackBar(
+          content:
+              Text(existing == null ? 'Added "${result.name}".' : 'Saved.')));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('$e')));
     }
-  }
-
-  Future<void> _rename(
-      BuildContext context, WidgetRef ref, MaterialTypeDef row) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) =>
-          _NameDialog(title: 'Rename type', initial: row.name),
-    );
-    if (name == null || name.trim().isEmpty || name.trim() == row.name) return;
-    final repo = await ref.read(entityRepoProvider.future);
-    await repo.renameMaterialType(row.id, name);
-    bumpLedger(ref);
-    messenger.showSnackBar(SnackBar(content: Text('Renamed to "$name".')));
   }
 
   Future<void> _delete(
@@ -82,12 +94,12 @@ class MaterialTypesScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Material Types'),
         actions: [
-          IconButton.filledTonal(
+          IconButton(
             tooltip: 'Add type',
-            icon: const Icon(Icons.add),
-            onPressed: () => _add(context, ref),
+            icon: const Icon(Icons.add, size: 26),
+            onPressed: () => _addOrEdit(context, ref, null),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
         ],
       ),
       body: AsyncView<List<MaterialTypeDef>>(
@@ -110,6 +122,7 @@ class MaterialTypesScreen extends ConsumerWidget {
               final r = rows[i];
               return Card(
                 child: ListTile(
+                  isThreeLine: r.uomType != null || r.uom != null,
                   leading: CircleAvatar(
                     child: Icon(r.isBuiltin
                         ? Icons.lock_outline
@@ -117,16 +130,14 @@ class MaterialTypesScreen extends ConsumerWidget {
                   ),
                   title: Text(r.name,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(r.isBuiltin
-                      ? 'Built-in · cannot be deleted'
-                      : 'Custom'),
+                  subtitle: _SubtitleSummary(row: r),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        tooltip: 'Rename',
+                        tooltip: 'Edit',
                         icon: const Icon(Icons.edit_outlined),
-                        onPressed: () => _rename(context, ref, r),
+                        onPressed: () => _addOrEdit(context, ref, r),
                       ),
                       IconButton(
                         tooltip: r.isBuiltin
@@ -139,6 +150,7 @@ class MaterialTypesScreen extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  onTap: () => _addOrEdit(context, ref, r),
                 ),
               );
             },
@@ -146,7 +158,7 @@ class MaterialTypesScreen extends ConsumerWidget {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _add(context, ref),
+        onPressed: () => _addOrEdit(context, ref, null),
         icon: const Icon(Icons.add),
         label: const Text('Add type'),
       ),
@@ -154,51 +166,286 @@ class MaterialTypesScreen extends ConsumerWidget {
   }
 }
 
-class _NameDialog extends StatefulWidget {
-  const _NameDialog({required this.title, this.initial});
-  final String title;
-  final String? initial;
+/// Compact one-liner under the title: shown on the list to give a
+/// procurement-fingerprint at a glance ("Surf · SQFT · cov 4.0 · waste 1.10").
+class _SubtitleSummary extends StatelessWidget {
+  const _SubtitleSummary({required this.row});
+  final MaterialTypeDef row;
 
   @override
-  State<_NameDialog> createState() => _NameDialogState();
+  Widget build(BuildContext context) {
+    final parts = <String>[
+      row.isBuiltin ? 'Built-in' : 'Custom',
+      if (row.uomType != null) row.uomType!.short,
+      if (row.uom != null && row.uom!.isNotEmpty) row.uom!,
+      if (row.coverageRate != null) 'cov ${row.coverageRate}',
+      if (row.wasteFactor != null)
+        'waste ${row.wasteFactor!.toStringAsFixed(2)}',
+      if (row.leadDays != null) 'lead ${row.leadDays}d',
+    ];
+    return Text(parts.join(' · '),
+        maxLines: 2, overflow: TextOverflow.ellipsis);
+  }
 }
 
-class _NameDialogState extends State<_NameDialog> {
-  late final TextEditingController _ctrl;
+/// Bottom-sheet form. Gathers a return value (a [MaterialTypeDef] used purely
+/// as a transport record — `id`, `isBuiltin`, `sortOrder`, `createdAt` are
+/// placeholders the caller ignores when updating an existing row).
+class _MaterialTypeForm extends StatefulWidget {
+  const _MaterialTypeForm({this.initial});
+  final MaterialTypeDef? initial;
+
+  @override
+  State<_MaterialTypeForm> createState() => _MaterialTypeFormState();
+}
+
+class _MaterialTypeFormState extends State<_MaterialTypeForm> {
+  late final TextEditingController _name;
+  late final TextEditingController _uom;
+  late final TextEditingController _cov;
+  late final TextEditingController _waste;
+  late final TextEditingController _lead;
+  late final TextEditingController _dimL;
+  late final TextEditingController _dimW;
+  late final TextEditingController _dimH;
+  late final TextEditingController _dimUnit;
+
+  UomType? _uomType;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = TextEditingController(text: widget.initial ?? '');
+    final r = widget.initial;
+    _name = TextEditingController(text: r?.name ?? '');
+    _uom = TextEditingController(text: r?.uom ?? '');
+    _cov = TextEditingController(
+        text: r?.coverageRate?.toString() ?? '');
+    _waste = TextEditingController(
+        text: r?.wasteFactor?.toString() ?? '');
+    _lead = TextEditingController(text: r?.leadDays?.toString() ?? '');
+    _dimL = TextEditingController(text: r?.dims?.length?.toString() ?? '');
+    _dimW = TextEditingController(text: r?.dims?.width?.toString() ?? '');
+    _dimH = TextEditingController(text: r?.dims?.height?.toString() ?? '');
+    _dimUnit = TextEditingController(text: r?.dims?.unit ?? '');
+    _uomType = r?.uomType;
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    for (final c in [
+      _name,
+      _uom,
+      _cov,
+      _waste,
+      _lead,
+      _dimL,
+      _dimW,
+      _dimH,
+      _dimUnit
+    ]) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  /// Defensive parser: blank → null, junk → null. Keeps the form forgiving.
+  double? _parseDouble(TextEditingController c) =>
+      double.tryParse(c.text.trim());
+  int? _parseInt(TextEditingController c) => int.tryParse(c.text.trim());
+
+  void _submit() {
+    final name = _name.text.trim();
+    if (name.isEmpty) return;
+
+    MaterialDims? dims;
+    if (_uomType == UomType.disc) {
+      final l = _parseDouble(_dimL);
+      final w = _parseDouble(_dimW);
+      final h = _parseDouble(_dimH);
+      final u = _dimUnit.text.trim();
+      if (l != null || w != null || h != null || u.isNotEmpty) {
+        dims = MaterialDims(
+            length: l, width: w, height: h, unit: u.isEmpty ? null : u);
+      }
+    }
+
+    Navigator.pop(
+      context,
+      MaterialTypeDef(
+        id: widget.initial?.id ?? '',
+        name: name,
+        isBuiltin: widget.initial?.isBuiltin ?? false,
+        sortOrder: widget.initial?.sortOrder ?? 0,
+        createdAt: widget.initial?.createdAt ?? DateTime.now().toUtc(),
+        uomType: _uomType,
+        uom: _uom.text.trim().isEmpty ? null : _uom.text.trim(),
+        coverageRate:
+            _uomType == UomType.surf ? _parseDouble(_cov) : null,
+        wasteFactor: _parseDouble(_waste),
+        leadDays: _parseInt(_lead),
+        dims: dims,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: TextField(
-        controller: _ctrl,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'Name',
-          hintText: 'e.g. Sand, Tiles, Paint',
-        ),
-        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+    final isSurf = _uomType == UomType.surf;
+    final isDisc = _uomType == UomType.disc;
+    final initial = widget.initial;
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+        left: 16,
+        right: 16,
+        top: 16,
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(
-            onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
-            child: const Text('Save')),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(initial == null ? 'New Material Type' : 'Edit Material Type',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _name,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Name *',
+                hintText: 'e.g. Sand, Tiles, Paint',
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<UomType?>(
+              initialValue: _uomType,
+              decoration: const InputDecoration(
+                labelText: 'UOM Class',
+                helperText: 'How this material is measured',
+              ),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('— None —')),
+                ...UomType.values.map((t) => DropdownMenuItem(
+                    value: t, child: Text('${t.short} · ${t.label}'))),
+              ],
+              onChanged: (v) => setState(() {
+                _uomType = v;
+                // Picking a class suggests a default UOM if the field was
+                // blank — keeps data entry quick without overwriting an
+                // existing custom value.
+                if (v != null && _uom.text.trim().isEmpty) {
+                  _uom.text = v.defaultUoms.first;
+                }
+              }),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _uom,
+              decoration: InputDecoration(
+                labelText: 'UOM',
+                hintText: _uomType == null
+                    ? 'EA / SQFT / CY / LBS …'
+                    : _uomType!.defaultUoms.join(', '),
+              ),
+            ),
+            if (isSurf) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _cov,
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Coverage rate',
+                  helperText: 'Units per area (only for Surface UOM)',
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _waste,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Waste factor',
+                    hintText: '1.10',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: _lead,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Lead time (days)',
+                    hintText: '3',
+                  ),
+                ),
+              ),
+            ]),
+            if (isDisc) ...[
+              const SizedBox(height: 16),
+              Text('Dimensions (optional)',
+                  style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: _DimField(label: 'L', controller: _dimL)),
+                const SizedBox(width: 8),
+                Expanded(child: _DimField(label: 'W', controller: _dimW)),
+                const SizedBox(width: 8),
+                Expanded(child: _DimField(label: 'H', controller: _dimH)),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 70,
+                  child: TextField(
+                    controller: _dimUnit,
+                    decoration: const InputDecoration(
+                      labelText: 'Unit',
+                      hintText: 'in',
+                    ),
+                  ),
+                ),
+              ]),
+            ],
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _submit,
+              child: Text(initial == null ? 'Create' : 'Save'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DimField extends StatelessWidget {
+  const _DimField({required this.label, required this.controller});
+  final String label;
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
       ],
+      decoration: InputDecoration(labelText: label),
     );
   }
 }

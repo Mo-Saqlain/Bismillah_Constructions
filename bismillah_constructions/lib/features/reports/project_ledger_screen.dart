@@ -66,34 +66,28 @@ class ProjectLedgerScreen extends ConsumerWidget {
   const ProjectLedgerScreen({super.key, required this.project});
   final Project project;
 
-  /// Each two-row balanced transaction collapses into one ledger row whose
-  /// debit-side entry holds the date/memo and is signed: positive = money
-  /// flowing INTO project costs, the running total is the cumulative
-  /// project spend (cost side).
+  /// Each entry from `entriesForProject` is already the project-attributable
+  /// leg (Material/Labour Costs as a debit, Project Revenue / Service Fee as
+  /// a credit). We render them as-is and accumulate the running net cost
+  /// position: costs push it positive, revenue pulls it negative.
+  ///
+  /// The memo prefers the user's description and falls back to the account
+  /// name (so a row never reads as a bare amount).
   List<LedgerRow> _toRows(List<JournalEntry> entries) {
-    final byTxn = <String, List<JournalEntry>>{};
-    for (final e in entries) {
-      (byTxn[e.transactionId] ??= []).add(e);
-    }
     double running = 0;
-    final out = <LedgerRow>[];
-    for (final pair in byTxn.values) {
-      if (pair.length != 2) continue;
-      final dr = pair.firstWhere((e) => e.debit > 0,
-          orElse: () => pair.first);
-      running += dr.debit - dr.credit;
-      final memo = (dr.description?.isNotEmpty ?? false)
-          ? dr.description!
-          : Accounts.byId(dr.accountId).name;
-      out.add(LedgerRow(
-        date: dr.createdAt,
+    return entries.map((e) {
+      running += e.debit - e.credit;
+      final memo = (e.description?.isNotEmpty ?? false)
+          ? e.description!
+          : Accounts.byId(e.accountId).name;
+      return LedgerRow(
+        date: e.createdAt,
         memo: memo,
-        debit: dr.debit,
-        credit: dr.credit,
+        debit: e.debit,
+        credit: e.credit,
         balance: running,
-      ));
-    }
-    return out;
+      );
+    }).toList();
   }
 
   Future<void> _exportPdf(List<JournalEntry> entries) async {

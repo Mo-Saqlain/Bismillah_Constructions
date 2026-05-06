@@ -485,13 +485,38 @@ class LedgerRepository {
     return rows.map(JournalEntry.fromMap).toList();
   }
 
+  /// Project ledger feed.
+  ///
+  /// `_post` tags BOTH legs of a balanced txn with the same `project_id`, so
+  /// a naïve "where project_id = ?" returns the offsetting cash/payables row
+  /// alongside the actual project leg — and the ledger view ends up
+  /// double-counting (and rendering revenue as a fake debit). We filter to
+  /// only the four accounts that actually represent project economics:
+  ///
+  ///   * Material Costs / Labour Costs — cost side (natural debit)
+  ///   * Project Revenue / Service Fee Income — income side (natural credit)
+  ///
+  /// Consequences:
+  ///   * Supplier Pay no longer appears in the project ledger (the cost was
+  ///     already booked at Material Buy time; the payment is a cash-side
+  ///     settlement, not a project cost event).
+  ///   * Receive From Project / Service Fee land in the credit column and
+  ///     properly reduce the project's net cost-side position.
   Future<List<JournalEntry>> entriesForProject(String projectId,
       {bool includeDeleted = false}) async {
-    final where = StringBuffer('project_id = ?');
+    const projectAccountIds = <String>[
+      'MATERIAL_COSTS',
+      'LABOUR_COSTS',
+      'PROJECT_REV',
+      'SERVICE_FEE',
+    ];
+    final where = StringBuffer(
+        'project_id = ? AND account_id IN (${projectAccountIds.map((_) => '?').join(', ')})');
+    final args = <Object>[projectId, ...projectAccountIds];
     if (!includeDeleted) where.write(' AND is_deleted = 0');
     final rows = await _db.query('journal_entries',
         where: where.toString(),
-        whereArgs: [projectId],
+        whereArgs: args,
         orderBy: 'created_at ASC');
     return rows.map(JournalEntry.fromMap).toList();
   }

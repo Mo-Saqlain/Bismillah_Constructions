@@ -28,7 +28,7 @@ Every cash movement is recorded as a balanced **debit/credit pair** on a fixed C
 - **Reports** — Income Statement, Balance Sheet, Cash Flow, Aging (0-30 / 31-60 / 61-90 / 90+), Budget vs Actual, Wage Register, Supplier Ledger, Customer Ledger.
 - **Charts** — Burn (cumulative spend vs budget), Price Trend (Steel / Cement / Bricks), Cash Position (stacked banks vs site floats), Liquidity Gauge (circular dial).
 - **Exports** — every statement exports to **CSV** and the major ones to **PDF**.
-- **Theme** — Light / Dark / System, green = positive, red = negative.
+- **Theme** — Light / Dark / System, blue = positive, red = negative.
 - **Flat permissions** — single-operator app; no roles, no PIN.
 
 ---
@@ -40,8 +40,6 @@ Every cash movement is recorded as a balanced **debit/credit pair** on a fixed C
 | Language / runtime     | Dart 3.11.5, Flutter 3.x                            |
 | State management       | `flutter_riverpod` 2.x                              |
 | Local DB               | `sqflite` + `sqflite_common_ffi` (desktop)          |
-| Cloud row sync         | `supabase_flutter` (journal_entries push only)      |
-| Cloud DB snapshot      | `mongo_dart` (single-doc binary upload)             |
 | Connectivity           | `connectivity_plus`                                 |
 | Charts                 | `fl_chart`                                          |
 | PDF reports            | `pdf` + `printing`                                  |
@@ -264,8 +262,6 @@ There are **three** independent persistence layers, each with a different role:
 | -------------------- | ----------------------------- | --------------------------------------------- | ------------------------------------- |
 | Local SQLite         | All live data                 | Every write                                   | App can't function (source of truth)  |
 | Local file backup    | Full `.db` file copy          | Cold-boot if last >6 h, or manual             | Survives uninstall on Android         |
-| Supabase row sync    | `journal_entries` rows only   | Connectivity change · 2-min ticker · per commit | Skipped silently if not configured    |
-| MongoDB cloud snapshot | Full `.db` file as BSON bin | Per commit (debounced 5 s) · connectivity     | Skipped silently if not configured    |
 
 ### 8.1 Local file backup — `BackupService`
 - Output dir on Android: `/Documents/Bismillah_Backups/` (external Documents — survives uninstall).
@@ -275,14 +271,6 @@ There are **three** independent persistence layers, each with a different role:
 - `shareBackup()` triggers system share sheet for portable .db hand-off.
 - `importBackup(path)` saves a `.before_import` safety copy then overwrites the live DB.
 
-### 8.2 MongoDB cloud snapshot — `MongoBackupService`
-- Collection: `db_snapshots` in the user-configured database (default `bismillah_erp`).
-- Each upload inserts a new immutable doc + upserts a per-device `latest_<deviceId>` pointer document.
-- Doc shape: `{deviceId, kind, createdAt, sizeBytes, sha1, appVersion, data: BsonBinary}`.
-- 15 MB cap per snapshot (Mongo BSON limit is 16 MB).
-- Per-device retention: keeps the newest 20 snapshots.
-- `scheduleUpload({debounce: 5s})` collapses bursts of commits into one upload.
-- `downloadTo(path)` retrieves the latest pointer (or any explicit `_id`) and writes it to disk; restore is then handled by `BackupService.importBackup()`.
 
 ### 8.3 Per-commit wiring — `commitSyncWiringProvider`
 ```dart
@@ -317,7 +305,6 @@ If unset, the app runs **local-only** and the dashboard sync indicator shows "Lo
 ### 10.2 In-app configuration (`Settings` screen)
 - **Theme** — System / Light / Dark
 - **Backup** — last backup timestamp, Run backup now, Export / Share latest backup
-- **Cloud Backup (MongoDB)** — URI, DB name, enable/disable toggle, Test connection, Backup now, Restore from cloud
 - **Audit** — Change Log viewer
 
 ### 10.3 Build-output relocation (Windows + OneDrive)
@@ -389,15 +376,6 @@ The signed APK lands at:
 
 ---
 
-## 14. Known limitations / future work
+## 14. License
 
-- Supabase sync is **push-only**; cross-device merge would require pulling rows back, which the spec deliberately avoids (single-operator app).
-- MongoDB snapshot cap is 15 MB. For larger DBs the upload errors with a clear message; switching to GridFS multi-chunk would lift this if/when it matters.
-- BvA splits material spend by `MaterialType` (brick / cement / sarya / finishing). True BoQ-line-level BvA would need a `boq_lines` table.
-- Charts on web are untested — the project targets Android, Windows, and macOS primarily.
-
----
-
-## 15. License
-
-Internal — © Bismillah Constructions. Not open-source.
+Internal — © Bismillah Constructions. Open-source.

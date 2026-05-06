@@ -284,19 +284,16 @@ class PdfGenerator {
     final tableRows = <List<String>>[
       ['Date', 'Memo', 'Debit', 'Credit', 'Running'],
     ];
-    final byTxn = <String, List<JournalEntry>>{};
+    // The repository already filtered to project-attributable rows
+    // (Material/Labour costs as debits, Project Revenue / Service Fee as
+    // credits), so we render them in order without trying to pair sides.
     for (final r in d.rows) {
-      (byTxn[r.transactionId] ??= []).add(r);
-    }
-    for (final pair in byTxn.values) {
-      if (pair.length != 2) continue;
-      final dr = pair.firstWhere((e) => e.debit > 0);
-      running += dr.debit - dr.credit;
+      running += r.debit - r.credit;
       tableRows.add([
-        fmtDate(dr.createdAt),
-        dr.description ?? '—',
-        dr.debit > 0 ? fmtMoney(dr.debit) : '',
-        dr.credit > 0 ? fmtMoney(dr.credit) : '',
+        fmtDate(r.createdAt),
+        r.description ?? '—',
+        r.debit > 0 ? fmtMoney(r.debit) : '',
+        r.credit > 0 ? fmtMoney(r.credit) : '',
         fmtMoney(running),
       ]);
     }

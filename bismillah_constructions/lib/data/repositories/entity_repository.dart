@@ -14,6 +14,12 @@ import '../models/project.dart';
 
 const _uuid = Uuid();
 
+/// Sentinel for "argument not supplied" so update methods can distinguish
+/// "leave this column alone" from "set this column to NULL". Use
+/// `identical(arg, _unset)` to test — never `==`, since `==` on Object
+/// could match other instances.
+const Object _unset = Object();
+
 class EntityRepository {
   EntityRepository(this._db);
   final Database _db;
@@ -588,8 +594,19 @@ class EntityRepository {
   /// duplicates (case-insensitive) to keep the dropdown clean. Returns the
   /// row, or `null` if [name] was empty.
   ///
+  /// All procurement metadata is optional — the caller can record only the
+  /// name and edit the rest later from the type's detail screen.
+  ///
   /// Throws if a row with the same name already exists.
-  Future<MaterialTypeDef?> addMaterialType(String name) async {
+  Future<MaterialTypeDef?> addMaterialType(
+    String name, {
+    UomType? uomType,
+    String? uom,
+    double? coverageRate,
+    double? wasteFactor,
+    int? leadDays,
+    MaterialDims? dims,
+  }) async {
     final clean = name.trim();
     if (clean.isEmpty) return null;
 
@@ -609,20 +626,68 @@ class EntityRepository {
       isBuiltin: false,
       // Pushes user-added rows after the built-ins and any earlier customs.
       sortOrder: 1000 + DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      uomType: uomType,
+      uom: uom,
+      coverageRate: coverageRate,
+      wasteFactor: wasteFactor,
+      leadDays: leadDays,
+      dims: dims,
       createdAt: DateTime.now().toUtc(),
     );
     await _db.insert('material_types', row.toMap());
     return row;
   }
 
-  /// Renames a material type. Built-ins can be renamed (display label changes)
-  /// but not deleted, so historical inventory rows always resolve to a label.
-  Future<void> renameMaterialType(String id, String newName) async {
-    final clean = newName.trim();
-    if (clean.isEmpty) return;
-    await _db.update('material_types', {'name': clean},
-        where: 'id = ?', whereArgs: [id]);
+  /// Updates editable fields on an existing material type. Built-ins can be
+  /// renamed and have their procurement metadata edited, but they cannot be
+  /// deleted (so historical inventory rows always resolve to a label).
+  ///
+  /// Pass `null` for any field to clear it (e.g. removing a coverage rate).
+  /// Pass nothing (omit the named arg) to leave it unchanged.
+  Future<void> updateMaterialType(
+    String id, {
+    Object? name = _unset,
+    Object? uomType = _unset,
+    Object? uom = _unset,
+    Object? coverageRate = _unset,
+    Object? wasteFactor = _unset,
+    Object? leadDays = _unset,
+    Object? dims = _unset,
+  }) async {
+    final patch = <String, Object?>{};
+    if (!identical(name, _unset)) {
+      final cleaned = (name as String?)?.trim();
+      if (cleaned == null || cleaned.isEmpty) return;
+      patch['name'] = cleaned;
+    }
+    if (!identical(uomType, _unset)) {
+      patch['uom_typ'] = (uomType as UomType?)?.db;
+    }
+    if (!identical(uom, _unset)) {
+      final cleaned = (uom as String?)?.trim();
+      patch['uom'] = (cleaned == null || cleaned.isEmpty) ? null : cleaned;
+    }
+    if (!identical(coverageRate, _unset)) {
+      patch['cov_rate'] = coverageRate as double?;
+    }
+    if (!identical(wasteFactor, _unset)) {
+      patch['waste_f'] = wasteFactor as double?;
+    }
+    if (!identical(leadDays, _unset)) {
+      patch['lead_d'] = leadDays as int?;
+    }
+    if (!identical(dims, _unset)) {
+      final d = dims as MaterialDims?;
+      patch['dims'] = (d == null || d.isEmpty) ? null : jsonEncode(d.toJson());
+    }
+    if (patch.isEmpty) return;
+    await _db
+        .update('material_types', patch, where: 'id = ?', whereArgs: [id]);
   }
+
+  /// Backwards-compatible helper for callers that only need to rename.
+  Future<void> renameMaterialType(String id, String newName) =>
+      updateMaterialType(id, name: newName);
 
   /// Deletes a user-defined material type. Built-ins are protected — calling
   /// this on a built-in is a no-op so an accidental tap can't strip a label

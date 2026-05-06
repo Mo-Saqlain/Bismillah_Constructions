@@ -1,392 +1,127 @@
-# Bismillah Constructions ERP
+# Bismillah Constructions
 
-> Solo-Con ERP — an offline-first, double-entry construction-project ledger built in Flutter.
-> Designed for a single operator running multiple sites: cash, bank, supplier, customer, material, labour, and project P&L all in one place, with rolling local backups + manual share-out.
-
----
-
-## 1. What the application does
-
-Bismillah Constructions ERP is a desktop / mobile / Android-tablet app that records every rupee that moves through a small-to-mid construction business and turns it into reports the owner can use to make decisions.
-
-It supports two contract models simultaneously:
-
-| Model            | Profit formula                                        | Use when                                                                  |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------- |
-| **With-Material**| `Profit = Σ(Customer Inflow) − Σ(Project Outflow)`    | The business buys materials and pays labour itself; profit = leftover.    |
-| **Labour-Rate**  | `Profit = Σ(Total Project Spend) × Service Fee %`    | The business is a pass-through; it earns a fixed % service fee.           |
-
-Every cash movement is recorded as a balanced **debit/credit pair** on a fixed Chart of Accounts, so reports (Income Statement, Balance Sheet, Cash Flow) come out correct by construction.
-
-### Headline feature list
-
-- **Transactions** — 8 canonical kinds (Material Buy, Labour Payment, Supplier Pay, Client Billing, Receive Payment, Wallet Transfer, Personal Draw, Service Fee). Each one posts a guaranteed-balanced journal entry.
-- **Reconciliation gate** — With-Material projects can only be archived when `Customer Inflow == Supplier Paid + Supplier Payables`. Labour-Rate projects skip the check (pass-through).
-- **Soft delete + reversal** — every delete is reversible; reversals post offsetting transactions.
-- **Audit log** — every edit/delete/archive records `{timestamp, action, oldData, newData, deviceId, note}`.
-- **Dual-layered backup** — local file backup every 6 h **plus** MongoDB cloud snapshot debounced 5 s after every commit (auto-uploads when online).
-- **Reports** — Income Statement, Balance Sheet, Cash Flow, Aging (0-30 / 31-60 / 61-90 / 90+), Budget vs Actual, Wage Register, Supplier Ledger, Customer Ledger.
-- **Charts** — Burn (cumulative spend vs budget), Price Trend (Steel / Cement / Bricks), Cash Position (stacked banks vs site floats), Liquidity Gauge (circular dial).
-- **Exports** — every statement exports to **CSV** and the major ones to **PDF**.
-- **Theme** — Light / Dark / System, green = positive, red = negative.
-- **Flat permissions** — single-operator app; no roles, no PIN.
+A simple offline-first app to run a small construction business by yourself.
+Track projects, suppliers, banks/wallets, materials and labour — and see
+where every rupee went.
 
 ---
 
-## 2. Tech stack
+## What you can do with it
 
-| Concern                | Choice                                              |
-| ---------------------- | --------------------------------------------------- |
-| Language / runtime     | Dart 3.11.5, Flutter 3.x                            |
-| State management       | `flutter_riverpod` 2.x                              |
-| Local DB               | `sqflite` + `sqflite_common_ffi` (desktop)          |
-| Cloud row sync         | `supabase_flutter` (journal_entries push only)      |
-| Connectivity           | `connectivity_plus`                                 |
-| Charts                 | `fl_chart`                                          |
-| PDF reports            | `pdf` + `printing`                                  |
-| Sharing / CSV export   | `share_plus`                                        |
-| File paths             | `path` + `path_provider`                            |
-| Hashing (snapshots)    | `crypto` (SHA-1 of DB blob)                         |
-| IDs                    | `uuid` v4                                           |
+- **Home** — see your cash on hand, payables, profit and recent activity.
+- **New Transaction** — record a Material Buy, Labour Payment, Supplier
+  Payment, Receive From Project, Wallet Transfer or Service Fee. Each one
+  updates the books automatically.
+- **Reports** — Income Statement, Balance Sheet, Cash Flow, Aging,
+  Project Budget vs Actual, Wage Register, plus per-supplier, per-bank
+  and per-project ledgers (export as PDF or CSV).
+- **Manage** — add/edit your Projects, Suppliers, Banks/Wallets and
+  Material Types in one place.
+- **Settings** — switch theme, run/share/import a backup, browse the
+  audit log of everything that changed.
 
----
-
-## 3. High-level architecture
-
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                          UI (Flutter widgets)                      │
-│                                                                    │
-│  Dashboard · Projects · Parties · Transactions · Reports · Charts  │
-│                                                                    │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │   ConsumerWidget / WidgetRef
-                               ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                  Riverpod providers (lib/providers/)               │
-│                                                                    │
-│   dbProvider · ledgerRepoProvider · entityRepoProvider             │
-│   syncServiceFutureProvider · backupServiceProvider                │
-│   commitSyncWiringProvider · backupBootCheckProvider               │
-│   accountSummaryProvider · projectsProvider · …                    │
-└──────────┬─────────────────┬────────────────────┬──────────────────┘
-           │                 │                    │
-           ▼                 ▼                    ▼
-┌──────────────────┐ ┌─────────────────┐ ┌─────────────────────────┐
-│  Repositories    │ │  Services       │ │  External services      │
-│                  │ │                 │ │                         │
-│  LedgerRepository│ │  BackupService  │ │  Supabase (rows)        │
-│  EntityRepository│ │  SyncService    │ │                         │
-└─────────┬────────┘ └────────┬────────┘ └─────────────────────────┘
-          │                   │
-          ▼                   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                       Local SQLite (LocalDb)                       │
-│        — single source of truth, double-entry general ledger —     │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-**Key architectural rules**
-
-1. **Local DB is the source of truth.** Everything written to Supabase / MongoDB is a *copy*; nothing is read back from the cloud at runtime.
-2. **All ledger writes go through `LedgerRepository`.** This is the only class that calls `db.insert('journal_entries', …)`. Direct DB access from screens is forbidden.
-3. **All audit events go through `change_log`.** Every soft delete / restore / archive / unarchive writes a `ChangeLog` row stamped with `device_id`.
-4. **Listeners, not callers, trigger sync.** `LedgerRepository` exposes commit listeners; `commitSyncWiringProvider` attaches the sync services. Repository code knows nothing about sync.
+Everything is stored locally on the device. Backups can be saved to the
+device and shared via WhatsApp / Gmail / Drive.
 
 ---
 
-## 4. Project layout
+## Build it yourself
 
-```
-lib/
-├── main.dart                           # ProviderScope + Supabase.initialize()
-├── app.dart                            # MaterialApp + bootstraps providers
-├── core/
-│   ├── constants.dart                  # Chart of Accounts, enums, settings keys
-│   ├── formatters.dart                 # fmtMoney, fmtDate, fmtSignedMoney
-│   └── theme.dart                      # Light/dark + BalanceColors
-├── data/
-│   ├── db/
-│   │   └── local_db.dart               # sqflite open + schema + migrations
-│   ├── models/                         # Plain Dart structs + toMap/fromMap
-│   │   ├── journal_entry.dart
-│   │   ├── change_log.dart
-│   │   ├── project.dart
-│   │   ├── party.dart   (customers & suppliers)
-│   │   ├── bank.dart
-│   │   ├── counter_entity.dart
-│   │   └── material_item.dart
-│   ├── repositories/
-│   │   ├── ledger_repository.dart      # journal_entries writes + reads + reports
-│   │   └── entity_repository.dart      # projects / parties / banks / settings
-│   ├── services/
-│   │   └── backup_service.dart         # local file backup, 6 h cold-boot trigger, retention
-│   └── sync/
-│       └── sync_service.dart           # Supabase row push (journal_entries)
-├── providers/
-│   └── providers.dart                  # Riverpod wiring for the whole app
-└── features/
-    ├── home/                           # Bottom-nav shell
-    ├── dashboard/                      # Treasury, P&L summary, recent activity
-    ├── transactions/                   # New txn picker, form, history, detail
-    ├── projects/                       # List, detail, reconciliation/archive
-    ├── parties/                        # Customers, suppliers, banks, counters
-    ├── reports/                        # All 9 report screens + CSV + PDF + charts
-    │   ├── reports_screen.dart
-    │   ├── income_statement_screen.dart
-    │   ├── balance_sheet_screen.dart
-    │   ├── cash_flow_screen.dart
-    │   ├── aging_analysis_screen.dart
-    │   ├── project_bva_picker_screen.dart  + project_bva_screen.dart
-    │   ├── wage_register_screen.dart
-    │   ├── charts_screen.dart              (Burn / Price / Cash / Liquidity)
-    │   ├── supplier_ledger_*.dart          + customer_ledger_screen.dart
-    │   ├── pdf_generator.dart              (PDF layout helpers)
-    │   └── csv_export.dart                 (RFC-4180 CSV + share sheet)
-    └── settings/                       # Theme, backup config, change log viewer
-```
+You only need three commands once the prerequisites are in place:
 
----
-
-## 5. Data model
-
-The local SQLite schema (currently version **4**) has 9 tables. Migrations are forward-only and additive.
-
-### 5.1 `journal_entries` — the ledger
-| column          | type     | notes                                           |
-| --------------- | -------- | ----------------------------------------------- |
-| id              | TEXT PK  | uuid v4                                         |
-| transaction_id  | TEXT     | groups the two rows of a single posting         |
-| account_id      | TEXT     | matches a `Account.id` from `Accounts` (CoA)    |
-| project_id      | TEXT?    | nullable                                        |
-| supplier_id     | TEXT?    | nullable                                        |
-| customer_id     | TEXT?    | nullable                                        |
-| debit, credit   | REAL     | exactly one is non-zero                         |
-| description     | TEXT?    | free text                                       |
-| created_at      | TEXT     | ISO-8601 UTC                                    |
-| synced          | INT      | 0 = not pushed to Supabase yet                  |
-| is_deleted      | INT      | soft delete flag                                |
-| deleted_at      | TEXT?    |                                                  |
-
-Every business transaction inserts **two** rows with the same `transaction_id` (one debit + one credit, equal amounts). This is enforced by `LedgerRepository._post()` and is the only place that writes to this table.
-
-### 5.2 `change_log` — audit trail
-`{id, entity_type, entity_id, action, original_data (JSON), new_data (JSON), note, device_id, timestamp}`
-
-Recorded for: delete, restore, archive, unarchive, edit. `device_id` is a stable per-install UUID generated on first run.
-
-### 5.3 Other tables
-- `projects` — `{id, name, model (with_material|labour_rate), status, customer_id, site_address, budget, project_manager, service_fee_percent, is_archived, archived_at, created_at}`
-- `customers`, `suppliers` — `Party` rows with category / tax_status / bank_details fields
-- `banks`, `counter_entities` — supporting entities
-- `material_inventory` — purchase / consumption rows (used for BvA + price-trend charts)
-- `app_settings` — opaque `{key, value}` for theme, backup timestamp, device_id, etc.
-
-### 5.4 Chart of Accounts (`core/constants.dart` → `Accounts`)
-
-| Type        | Accounts                                                                                      |
-| ----------- | --------------------------------------------------------------------------------------------- |
-| Asset       | Cash, Bank-HBL, Bank-Meezan, Bank-Alfalah, Supervisor Float, External Wallet, Client Receivables, Counter Receivables |
-| Liability   | Supplier Payables, Counter Payables                                                           |
-| Income      | Project Revenue, Service Fee Income                                                           |
-| Expense     | Material Costs, Labour Costs, Personal / Daily Draw                                            |
-| Equity      | Owner's Equity                                                                                |
-
-`Accounts.cashLikeAccounts` (Cash + 3 Banks + Supervisor Float) defines the wallets that count toward `Liquid_Cash`.
-
----
-
-## 6. Transaction kinds — the only writes that matter
-
-Defined as `TxnKind` in `core/constants.dart`. Each maps to exactly one debit/credit pair.
-
-| Kind             | Debit                  | Credit                   |
-| ---------------- | ---------------------- | ------------------------ |
-| materialBuy      | Material Costs         | Supplier Payables        |
-| labourPayment    | Labour Costs           | Cash / Bank              |
-| supplierPay      | Supplier Payables      | Cash / Bank              |
-| clientBilling    | Client Receivables     | Project Revenue          |
-| receivePayment   | Cash / Bank            | Client Receivables       |
-| walletTransfer   | Destination wallet     | Source wallet            |
-| personalDraw     | Personal Draw          | Cash / Bank              |
-| serviceFee       | Cash / Bank            | Service Fee Income       |
-
-The repository validates: amount > 0, source account is in `cashLikeAccounts` where required, source ≠ destination on transfers, etc.
-
----
-
-## 7. Reporting engine
-
-All financial calculations come out of `LedgerRepository` SQL aggregates over `journal_entries` (excluding soft-deletes).
-
-### 7.1 Always-on snapshot — `accountSummaryProvider`
-Computes every dashboard / balance-sheet number in a single pass:
-
-```text
-liquidCash      = cash + bankHbl + bankMeezan + bankAlfalah + supervisorFloat
-netLiquidity    = liquidCash − supplierPayables           // cash truly free to spend
-assets          = liquidCash + receivables + counterReceivables
-liabilities     = supplierPayables + counterPayables
-netProfit       = (revenue + serviceFeeIncome) − (materialCosts + labourCosts + personalDraw)
-equity          = assets − liabilities
-totalNetWorth   = liquidCash + (receivables + counterReceivables − liabilities)
-```
-
-### 7.2 Statements
-- **Income Statement** — `creditBalance(PROJECT_REV) − accountBalance(MATERIAL_COSTS) − accountBalance(LABOUR_COSTS)` (project-filterable).
-- **Balance Sheet** — Assets vs Liabilities + Equity, with a balanced/unbalanced banner.
-- **Cash Flow** — `monthlyCashFlow(monthsBack=12)` returns `[month → {accountId → Δ}]` for the 5 cash-like accounts.
-- **Aging Analysis** — FIFO open-balance matcher per party, bucketed `0-30 / 31-60 / 61-90 / 90+` days. Works for both receivables and payables.
-- **Budget vs Actual** — actual spend per `MaterialType` (from `material_inventory`) + Labour, compared against `Project.budget`.
-- **Wage Register** — labour debits grouped by supplier (worker), with payment counts and last-paid date.
-- **Supplier / Customer Ledger** — running balance for one party, project-filterable.
-
-### 7.3 Charts (`features/reports/charts_screen.dart`, `fl_chart`)
-- **Burn Chart** — line of cumulative project outflow + dashed budget line.
-- **Price Trend** — line per material type using `material_inventory.rate` over time.
-- **Cash Position** — two stacked bars (Banks vs Site Floats).
-- **Liquidity Gauge** — circular `CircularProgressIndicator` showing `liquidCash / payables` coverage, centre label = `Net Liquidity`.
-
-### 7.4 Exports
-- **PDF** — `pdf_generator.dart` (Income Statement, Balance Sheet, Supplier Ledger).
-- **CSV** — `csv_export.dart` (RFC-4180 quoted; writes to temp dir; triggers `share_plus`). Hooked into every statement screen.
-
----
-
-## 8. Backup & sync architecture
-
-There are **three** independent persistence layers, each with a different role:
-
-| Layer                | What it stores                | Trigger                                       | Failure mode                          |
-| -------------------- | ----------------------------- | --------------------------------------------- | ------------------------------------- |
-| Local SQLite         | All live data                 | Every write                                   | App can't function (source of truth)  |
-| Local file backup    | Full `.db` file copy          | Cold-boot if last >6 h, or manual             | Survives uninstall on Android         |
-| Supabase row sync    | `journal_entries` rows only   | Connectivity change · 2-min ticker · per commit | Skipped silently if not configured    |
-| MongoDB cloud snapshot | Full `.db` file as BSON bin | Per commit (debounced 5 s) · connectivity     | Skipped silently if not configured    |
-
-### 8.1 Local file backup — `BackupService`
-- Output dir on Android: `/Documents/Bismillah_Backups/` (external Documents — survives uninstall).
-- Output dir on desktop: `<AppDocuments>/Bismillah_Backups/`.
-- Two files written each run: `solo_con_<UTC-stamp>.db` + a rolling `solo_con_latest.db` for fast share/import.
-- `maybeRunSilentBackup()` gates on `last_backup_at` setting (≥ 6 h since last).
-- `shareLatestBackup()` / `shareBackup(path)` push the file through the system share sheet — primary off-device path is **WhatsApp / Gmail / Drive** (no embedded cloud client).
-- `importBackup(path)` validates the SQLite header, saves a `.before_import` safety copy, then overwrites the live DB.
-- `rollbackLastImport()` swaps the current DB back to `.before_import` (saves the displaced one as `.before_rollback` — undo for the undo).
-- `listBackups()` / `deleteBackup(path)` power the **Backup History** screen.
-- Retention: `BackupService.retentionCount` (default 30) — older timestamped snapshots are pruned silently after each run; the `_latest.db` pointer is always kept.
-
-### 8.2 Per-commit wiring — `commitSyncWiringProvider`
-```dart
-ledger.addCommitListener(() {
-  unawaited(sync.syncNow()); // Supabase row push (only if SUPABASE_* configured)
-});
-```
-Watched once at app boot from `app.dart`.
-
----
-
-## 9. Audit & traceability
-
-Because permissions are flat, **the audit log is the only forensic trail**.
-
-- Every `softDeleteTransaction` / `restoreTransaction` / `archiveProject` / `unarchiveProject` / `logChange` call writes a row to `change_log`.
-- Each row carries the install's stable `device_id` (UUID v4 generated on first run, stored in `app_settings`).
-- The Settings → **Change Log** screen lists every event newest-first, with a CSV export.
-
----
-
-## 10. Configuration
-
-### 10.1 Optional environment toggles (passed at `flutter run` / build time)
 ```bash
---dart-define=SUPABASE_URL=https://xxx.supabase.co
---dart-define=SUPABASE_ANON_KEY=eyJ…
-```
-If unset, the app runs **local-only** and the dashboard sync indicator shows "Local".
-
-### 10.2 In-app configuration (`Settings` screen)
-- **Theme** — System / Light / Dark
-- **Backup** — last backup timestamp, Run backup now, Share latest backup, Import backup, Backup history (browse / share / restore / delete past snapshots), Undo last import
-- **Audit** — Change Log viewer
-
-### 10.3 Build-output relocation (Windows + OneDrive)
-If your project lives inside a OneDrive-synced folder, set `BISMILLAH_BUILD_DIR` to an absolute path **outside** OneDrive before building, otherwise Gradle's `mergeReleaseNativeLibs` will fail with `AccessDeniedException`.
-
-```powershell
-$env:BISMILLAH_BUILD_DIR = "C:\bismillah-build"
-flutter build apk --release
-```
-
-`android/build.gradle.kts` honours this env var (see top of that file for the exact logic).
-
----
-
-## 11. Build & run
-
-### 11.1 Prerequisites
-- Flutter SDK 3.x with Dart 3.11.5+
-- Android SDK 34 (or higher) — `compileSdk` is forced to 34 for all subprojects in `android/build.gradle.kts`
-- For desktop: Visual Studio 2022 build tools (Windows) or equivalent
-
-### 11.2 Quick start
-```bash
+flutter clean
 flutter pub get
-flutter run                 # picks the connected device / emulator
-```
-
-### 11.3 Release builds
-```bash
-# Android APK (universal, ~60 MB)
 flutter build apk --release
-
-# Smaller per-ABI APKs
-flutter build apk --release --split-per-abi
-
-# AAB for Play Store
-flutter build appbundle --release
-
-# Windows desktop
-flutter build windows --release
 ```
 
 The signed APK lands at:
-`build/app/outputs/flutter-apk/app-release.apk` (or under `BISMILLAH_BUILD_DIR` if set).
+
+```
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+Install that file on any Android phone or tablet.
+
+### What you need installed first
+
+1. **Flutter SDK 3.x** — <https://docs.flutter.dev/get-started/install>
+   (includes the Dart SDK).
+2. **Android Studio** (or just the **Android command-line tools** + SDK)
+   — needed for the Android build toolchain.
+   - Install **Android SDK Platform 34** from the SDK Manager.
+   - Install **Android SDK Build-Tools** and **Android SDK Command-line Tools**.
+3. **Java JDK 17** — bundled with recent Android Studio installs; otherwise
+   install it separately and make sure `JAVA_HOME` points at it.
+4. **Git** — to clone the project.
+
+After installing, run `flutter doctor` once and fix anything it flags
+(usually "Android licenses not accepted" — fix with `flutter doctor
+--android-licenses`).
+
+### Want a smaller APK?
+
+```bash
+flutter build apk --release --split-per-abi
+```
+
+This produces three smaller APKs (one per CPU architecture) instead of
+one large universal APK.
+
+### Want to run it on your desktop?
+
+```bash
+flutter run            # run on a connected phone or emulator
+flutter run -d windows # run as a Windows app
+```
+
+### Tip for Windows + OneDrive users
+
+If your project folder is inside OneDrive, the Android build can fail
+with a permission error. Move the project somewhere outside OneDrive
+(e.g. `C:\projects\bismillah`) before building.
 
 ---
 
-## 12. App boot sequence
+## Folder structure (just the bits you'll touch)
 
-1. `main.dart` — `WidgetsFlutterBinding.ensureInitialized()` → `Supabase.initialize(…)` if env vars are set → `runApp(ProviderScope(SoloConApp))`.
-2. `app.dart` builds `MaterialApp` and **eagerly watches** four boot providers so they spin up immediately:
-   - `syncServiceFutureProvider` — starts Supabase ticker + connectivity listener.
-   - `backupBootCheckProvider` — runs the >6 h silent local backup if due.
-   - `commitSyncWiringProvider` — attaches the cloud-sync commit listener.
-   - `themeModeProvider` — restores the saved theme.
-3. `LocalDb.instance.open()` runs migrations (currently v3 → v4 adds `device_id` to `change_log`).
+```
+bismillah_constructions/
+├── lib/                ← all the Dart code lives here
+│   ├── main.dart       ← app entry point
+│   ├── app.dart        ← theme + top-level setup
+│   ├── core/           ← constants, formatters, theme colours
+│   ├── data/           ← database, models, repositories
+│   ├── providers/      ← state plumbing (Riverpod)
+│   └── features/       ← one folder per screen area
+│       ├── home/         dashboard tab
+│       ├── dashboard/    home page widgets
+│       ├── transactions/ new-txn form, history
+│       ├── projects/     project list & detail
+│       ├── parties/      suppliers + banks/wallets
+│       ├── reports/      every report & ledger screen
+│       ├── manage/       the "Manage" tab
+│       └── settings/     theme, backup, audit, material types
+├── android/            ← Android build config (rarely touched)
+├── assets/             ← logo + images
+└── pubspec.yaml        ← dependencies list
+```
 
----
-
-## 13. Coding conventions
-
-- Repositories never import `package:flutter/*`. Pure Dart, easy to unit-test.
-- Models are plain classes with `toMap()` / `fromMap()` / `const` constructors. No `json_serializable`.
-- Screens use `ConsumerWidget` / `ConsumerStatefulWidget`. State that triggers re-fetch goes through `ledgerVersionProvider` (`bumpLedger(ref)` after any mutation).
-- Money is stored as `REAL` (double) in SQLite and formatted via `fmtMoney` / `fmtSignedMoney`. PKR currency, locale `en_PK`, no decimal digits in the UI.
-- Times are stored as ISO-8601 UTC strings; converted to local for display via `fmtDate` / `fmtDateTime`.
-- Green / red coloring uses `BalanceColors.signed(context, value)` — never hard-coded `Colors.green` / `Colors.red`, so dark mode stays legible.
-- Comments are reserved for the *why* (constraints, invariants, surprising behavior) — not the *what*.
-
----
-
-## 14. Known limitations / future work
-
-- Supabase sync is **push-only**; cross-device merge would require pulling rows back, which the spec deliberately avoids (single-operator app).
-- MongoDB snapshot cap is 15 MB. For larger DBs the upload errors with a clear message; switching to GridFS multi-chunk would lift this if/when it matters.
-- BvA splits material spend by `MaterialType` (brick / cement / sarya / finishing). True BoQ-line-level BvA would need a `boq_lines` table.
-- Charts on web are untested — the project targets Android, Windows, and macOS primarily.
+If you want to change a screen, find it under `lib/features/<area>/` and
+edit it directly. If you want to change colours or fonts, look in
+`lib/core/theme.dart`.
 
 ---
 
-## 15. License
+## When something goes wrong
 
-Internal — © Bismillah Constructions. Not open-source.
+- **`flutter pub get` fails** → check your internet, then re-run.
+- **APK build fails on Android licenses** → run
+  `flutter doctor --android-licenses` and accept all.
+- **App opens but data looks empty** → on first run that's normal; tap
+  "+ New Transaction" to start.
+- **Lost data after reinstall** → backups are in
+  `Documents/Bismillah_Backups/` on Android — use Settings → "Import
+  backup" to restore.
+
+That's it. Three commands and you're shipping.

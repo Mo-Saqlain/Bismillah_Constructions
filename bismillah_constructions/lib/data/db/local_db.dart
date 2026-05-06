@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 7);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 8);
 
   Database? _db;
   String? _dbPath;
@@ -41,7 +41,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 8,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -175,12 +175,21 @@ class LocalDb {
       )
     ''');
 
+    // v7 base columns + v8 procurement metadata. uom_typ is one of
+    // 'disc' / 'surf' / 'vol' / 'wgt'; cov_rate / dims are only meaningful
+    // for some uom_typ values, so they're nullable.
     await db.execute('''
       CREATE TABLE material_types (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         is_builtin INTEGER NOT NULL DEFAULT 0,
         sort_order INTEGER NOT NULL DEFAULT 0,
+        uom_typ TEXT,
+        uom TEXT,
+        cov_rate REAL,
+        waste_f REAL,
+        lead_d INTEGER,
+        dims TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -329,6 +338,23 @@ class LocalDb {
         )
       ''');
       await _seedMaterialTypes(db);
+    }
+
+    if (oldVersion < 8) {
+      // v8: procurement metadata on material types. All nullable so existing
+      // rows survive untouched; the UI offers them as optional fields.
+      for (final ddl in const [
+        'ALTER TABLE material_types ADD COLUMN uom_typ TEXT',
+        'ALTER TABLE material_types ADD COLUMN uom TEXT',
+        'ALTER TABLE material_types ADD COLUMN cov_rate REAL',
+        'ALTER TABLE material_types ADD COLUMN waste_f REAL',
+        'ALTER TABLE material_types ADD COLUMN lead_d INTEGER',
+        'ALTER TABLE material_types ADD COLUMN dims TEXT',
+      ]) {
+        try {
+          await db.execute(ddl);
+        } catch (_) {/* may already exist on partial upgrades */}
+      }
     }
 
     if (oldVersion < 3) {
