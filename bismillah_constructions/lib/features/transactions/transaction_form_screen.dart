@@ -23,6 +23,10 @@ class _TransactionFormScreenState
   final _formKey = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  /// Only used for [TxnKind.labourCredit] — number of workers that came in
+  /// for the period being recorded. Folded into the description like
+  /// `N workers · {user memo}` so the count survives in the audit log.
+  final _workerCountCtrl = TextEditingController();
 
   String? _projectId;
   String? _supplierId;
@@ -37,11 +41,13 @@ class _TransactionFormScreenState
   bool get _isMaterialBuy => _k == TxnKind.materialBuy;
   bool get _isWalletTransfer => _k == TxnKind.walletTransfer;
   bool get _isPersonalDraw => _k == TxnKind.personalDraw;
+  bool get _isLabourCredit => _k == TxnKind.labourCredit;
 
   /// Project is REQUIRED for everything that touches a project's books.
   bool get _needsProject => switch (_k) {
         TxnKind.materialBuy ||
         TxnKind.labourPayment ||
+        TxnKind.labourCredit ||
         TxnKind.receiveFromProject ||
         TxnKind.serviceFee =>
           true,
@@ -55,7 +61,8 @@ class _TransactionFormScreenState
   bool get _needsSupplier => switch (_k) {
         TxnKind.materialBuy ||
         TxnKind.supplierPay ||
-        TxnKind.labourPayment =>
+        TxnKind.labourPayment ||
+        TxnKind.labourCredit =>
           true,
         _ => false,
       };
@@ -75,6 +82,7 @@ class _TransactionFormScreenState
   void dispose() {
     _amountCtrl.dispose();
     _descCtrl.dispose();
+    _workerCountCtrl.dispose();
     super.dispose();
   }
 
@@ -122,6 +130,19 @@ class _TransactionFormScreenState
               supplierId: _supplierId!,
               paidFrom: _cashLike!,
               description: desc);
+        case TxnKind.labourCredit:
+          // Worker count gets prepended to the memo so the audit trail keeps
+          // the headcount alongside the wages amount.
+          final n = int.tryParse(_workerCountCtrl.text.trim());
+          final memo = [
+            if (n != null && n > 0) '$n worker${n == 1 ? '' : 's'}',
+            ?desc,
+          ].join(' · ');
+          txnId = await ledger.postLabourCredit(
+              amount: amount,
+              projectId: _projectId!,
+              supplierId: _supplierId!,
+              description: memo.isEmpty ? null : memo);
         case TxnKind.supplierPay:
           txnId = await ledger.postSupplierPay(
               amount: amount,
@@ -202,6 +223,22 @@ class _TransactionFormScreenState
                 const SizedBox(height: 12),
               ],
 
+              if (_isLabourCredit) ...[
+                TextFormField(
+                  controller: _workerCountCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Number of Workers',
+                    helperText:
+                        'How many labourers showed up for this period',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
               TextFormField(
                 controller: _amountCtrl,
                 keyboardType:
@@ -271,15 +308,18 @@ class _TransactionFormScreenState
                   value: suppliers,
                   data: (list) {
                     // Filter suppliers by category for category-specific txn kinds.
-                    // labour payments → labor suppliers only; material payments
-                    // (TxnKind.supplierPay) and material buys → material suppliers
-                    // only. Suppliers without a category fall through (legacy data).
+                    // labour payments / labour-on-credit → labor suppliers only;
+                    // material payments (TxnKind.supplierPay) and material buys →
+                    // material suppliers only. Suppliers without a category fall
+                    // through (legacy data).
                     final filtered = switch (_k) {
-                      TxnKind.labourPayment => list
-                          .where((s) =>
-                              s.category == null ||
-                              s.category == SupplierCategory.labor)
-                          .toList(),
+                      TxnKind.labourPayment ||
+                      TxnKind.labourCredit =>
+                        list
+                            .where((s) =>
+                                s.category == null ||
+                                s.category == SupplierCategory.labor)
+                            .toList(),
                       TxnKind.supplierPay || TxnKind.materialBuy => list
                           .where((s) =>
                               s.category == null ||
@@ -289,7 +329,8 @@ class _TransactionFormScreenState
                     };
                     if (filtered.isEmpty) {
                       return Text(
-                        _k == TxnKind.labourPayment
+                        _k == TxnKind.labourPayment ||
+                                _k == TxnKind.labourCredit
                             ? 'No labour-category suppliers. Add one in Suppliers.'
                             : 'No material-category suppliers. Add one in Suppliers.',
                         style: TextStyle(
@@ -304,7 +345,8 @@ class _TransactionFormScreenState
                     return DropdownButtonFormField<String>(
                       initialValue: _supplierId,
                       decoration: InputDecoration(
-                        labelText: _k == TxnKind.labourPayment
+                        labelText: _k == TxnKind.labourPayment ||
+                                _k == TxnKind.labourCredit
                             ? 'Labour Provider *'
                             : 'Material Supplier *',
                       ),
@@ -436,6 +478,10 @@ class _RoutingSummary extends StatelessWidget {
         TxnKind.labourPayment => (
             dr: Accounts.labourCosts.name,
             cr: 'Cash / Bank'
+          ),
+        TxnKind.labourCredit => (
+            dr: Accounts.labourCosts.name,
+            cr: Accounts.supplierPayables.name
           ),
         TxnKind.supplierPay => (
             dr: Accounts.supplierPayables.name,

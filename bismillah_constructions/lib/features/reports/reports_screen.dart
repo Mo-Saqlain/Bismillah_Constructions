@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'aging_analysis_screen.dart';
 import 'balance_sheet_screen.dart';
+import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
 import 'supplier_ledger_picker_screen.dart';
-import 'wage_register_screen.dart';
+import 'wage_ledger_screen.dart';
 import 'bank_ledger_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
@@ -48,12 +49,23 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.engineering,
-            title: 'Wage Register',
-            subtitle: 'Labour payments grouped by worker / supplier',
+            title: 'Wage Ledger',
+            subtitle:
+                'Per-worker statement of every wage charged (paid + on credit), date-filterable',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) => const WageRegisterScreen())),
+                    builder: (_) => const WageLedgerPickerScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.swap_vert,
+            title: 'Cash Flow Statement',
+            subtitle:
+                'Operating, financing and net cash movement across all projects',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const CashFlowScreen())),
           ),
           _ReportTile(
             icon: Icons.receipt_long,

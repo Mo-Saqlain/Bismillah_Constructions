@@ -35,6 +35,7 @@ class LedgerView extends StatelessWidget {
     required this.rows,
     required this.totalLabel,
     required this.totalValue,
+    this.particularsHeader = 'Particulars',
     this.debitHeader = 'Debit',
     this.creditHeader = 'Credit',
     this.balanceHeader = 'Balance',
@@ -42,6 +43,10 @@ class LedgerView extends StatelessWidget {
     this.signedTotal = false,
     this.headerBelowTitle,
   });
+
+  /// Column header for the memo / description column. Defaults to
+  /// "Particulars" — the FBR ledger convention.
+  final String particularsHeader;
 
   /// Big page heading.
   final String title;
@@ -103,7 +108,7 @@ class LedgerView extends StatelessWidget {
                   Row(
                     children: [
                       const _H('Date', flex: 3),
-                      const _H('Memo', flex: 4),
+                      _H(particularsHeader, flex: 4),
                       _H(debitHeader, flex: 2, right: true),
                       _H(creditHeader, flex: 2, right: true),
                       _H(balanceHeader, flex: 3, right: true),

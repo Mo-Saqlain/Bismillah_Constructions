@@ -3,46 +3,56 @@ import 'dart:convert';
 /// Unit-of-measure dimension class for a material category.
 ///
 /// Drives how the material is priced/ordered:
-///   * `disc` — discrete countable units (bricks, tiles, fittings) — usually
-///     paired with `EA`. May carry physical dimensions in [MaterialTypeDef.dims].
-///   * `surf` — surface area (tiles per SQFT, paint per gallon-per-SQFT).
+///   * `discrete` — countable units (bricks, tiles, fittings) — usually
+///     paired with `Each` or `Pieces`. May carry physical dimensions in
+///     [MaterialTypeDef.dims].
+///   * `surface`  — surface area (tiles per square foot, paint coverage).
 ///     [MaterialTypeDef.coverageRate] kicks in here.
-///   * `vol`  — volume (concrete in CY, sand in m³).
-///   * `wgt`  — weight (steel in LBS / KG, cement in BAG/KG).
-enum UomType { disc, surf, vol, wgt }
+///   * `volume`   — volume (concrete in cubic yards, sand in cubic meters).
+///   * `weight`   — weight (steel, cement bags, etc.).
+enum UomType { discrete, surface, volume, weight }
 
 extension UomTypeX on UomType {
   String get db => name;
+
+  /// Full human-readable label. We deliberately do not abbreviate — the
+  /// user prefers "Discrete" / "Surface" / "Volume" / "Weight" everywhere
+  /// the type is shown.
   String get label => switch (this) {
-        UomType.disc => 'Discrete',
-        UomType.surf => 'Surface',
-        UomType.vol => 'Volume',
-        UomType.wgt => 'Weight',
-      };
-  String get short => switch (this) {
-        UomType.disc => 'Disc',
-        UomType.surf => 'Surf',
-        UomType.vol => 'Vol',
-        UomType.wgt => 'Wgt',
+        UomType.discrete => 'Discrete',
+        UomType.surface => 'Surface',
+        UomType.volume => 'Volume',
+        UomType.weight => 'Weight',
       };
 
-  /// Suggested UOM strings for the picker. The user can still type any
-  /// string they like — these are just defaults so the field isn't blank.
+  /// Suggested unit-of-measure strings for the picker. Spelled out — the
+  /// user can still type whatever they like, these are just defaults so
+  /// the field isn't blank.
   List<String> get defaultUoms => switch (this) {
-        UomType.disc => const ['EA', 'PCS'],
-        UomType.surf => const ['SQFT', 'SQM'],
-        UomType.vol => const ['CY', 'M3', 'L'],
-        UomType.wgt => const ['LBS', 'KG', 'BAG', 'TON'],
+        UomType.discrete => const ['Each', 'Pieces'],
+        UomType.surface => const ['Square Feet', 'Square Meters'],
+        UomType.volume => const ['Cubic Yards', 'Cubic Meters', 'Liters'],
+        UomType.weight => const ['Pounds', 'Kilograms', 'Bags', 'Tons'],
       };
 
   static UomType? fromDb(String? s) {
     if (s == null) return null;
+    // Backwards-compat shim: rows written before the v8 → v9 rename used
+    // the abbreviated enum names ('disc', 'surf', 'vol', 'wgt'). Map them
+    // onto the new spelled-out enum so existing data keeps working.
+    const aliases = <String, UomType>{
+      'disc': UomType.discrete,
+      'surf': UomType.surface,
+      'vol': UomType.volume,
+      'wgt': UomType.weight,
+    };
+    if (aliases.containsKey(s)) return aliases[s];
     return UomType.values
-        .firstWhere((v) => v.name == s, orElse: () => UomType.disc);
+        .firstWhere((v) => v.name == s, orElse: () => UomType.discrete);
   }
 }
 
-/// Length / Width / Height for [UomType.disc] items (e.g. a brick is
+/// Length / Width / Height for [UomType.discrete] items (e.g. a brick is
 /// 9"×4.5"×3"). All three are optional — record only what's known.
 class MaterialDims {
   final double? length;
@@ -81,9 +91,10 @@ class MaterialDims {
 /// User-managed material category. Built-in rows (the original five) cannot
 /// be deleted but their label can be renamed; custom rows are fully editable.
 ///
-/// v8 added procurement metadata (UOM, coverage rate, waste factor, lead
-/// time, physical dims) so a single category can drive ordering math, not
-/// just labelling.
+/// v8 added procurement metadata (UOM class + unit, coverage rate, physical
+/// dims). The waste-factor and lead-time fields that briefly lived here were
+/// removed by user request — the underlying database columns remain (so old
+/// installs upgrade cleanly), they're just no longer surfaced.
 class MaterialTypeDef {
   final String id;
   final String name;
@@ -91,21 +102,17 @@ class MaterialTypeDef {
   final int sortOrder;
   final UomType? uomType;
 
-  /// Free-form unit string (EA / SQFT / CY / LBS / BAG / …). Not constrained
-  /// to a fixed enum because every site has its own conventions.
+  /// Free-form unit string spelled out where possible
+  /// ("Each", "Square Feet", "Cubic Yards", "Pounds", "Bags", …).
+  /// Not constrained to a fixed enum because every site has its own
+  /// conventions.
   final String? uom;
 
-  /// Units required per area, only meaningful for [UomType.surf]
-  /// (e.g. 4 tiles / SQFT).
+  /// Units required per area, only meaningful for [UomType.surface]
+  /// (e.g. 4 tiles per square foot).
   final double? coverageRate;
 
-  /// Default waste multiplier (e.g. 1.10 = order 10 % extra).
-  final double? wasteFactor;
-
-  /// Order-to-site buffer in days.
-  final int? leadDays;
-
-  /// L/W/H bundle for [UomType.disc] items.
+  /// L/W/H bundle for [UomType.discrete] items.
   final MaterialDims? dims;
 
   final DateTime createdAt;
@@ -119,8 +126,6 @@ class MaterialTypeDef {
     this.uomType,
     this.uom,
     this.coverageRate,
-    this.wasteFactor,
-    this.leadDays,
     this.dims,
   });
 
@@ -129,8 +134,6 @@ class MaterialTypeDef {
     UomType? uomType,
     String? uom,
     double? coverageRate,
-    double? wasteFactor,
-    int? leadDays,
     MaterialDims? dims,
   }) =>
       MaterialTypeDef(
@@ -142,8 +145,6 @@ class MaterialTypeDef {
         uomType: uomType ?? this.uomType,
         uom: uom ?? this.uom,
         coverageRate: coverageRate ?? this.coverageRate,
-        wasteFactor: wasteFactor ?? this.wasteFactor,
-        leadDays: leadDays ?? this.leadDays,
         dims: dims ?? this.dims,
       );
 
@@ -155,8 +156,6 @@ class MaterialTypeDef {
         'uom_typ': uomType?.db,
         'uom': uom,
         'cov_rate': coverageRate,
-        'waste_f': wasteFactor,
-        'lead_d': leadDays,
         'dims':
             (dims == null || dims!.isEmpty) ? null : jsonEncode(dims!.toJson()),
         'created_at': createdAt.toUtc().toIso8601String(),
@@ -170,8 +169,6 @@ class MaterialTypeDef {
         uomType: UomTypeX.fromDb(m['uom_typ'] as String?),
         uom: m['uom'] as String?,
         coverageRate: (m['cov_rate'] as num?)?.toDouble(),
-        wasteFactor: (m['waste_f'] as num?)?.toDouble(),
-        leadDays: (m['lead_d'] as num?)?.toInt(),
         dims: MaterialDims.fromJson(m['dims'] as String?),
         createdAt: DateTime.parse(m['created_at'] as String),
       );

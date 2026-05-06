@@ -11,6 +11,7 @@ class TransactionPickerScreen extends StatelessWidget {
   static const _visibleKinds = <TxnKind>[
     TxnKind.materialBuy,
     TxnKind.labourPayment,
+    TxnKind.labourCredit,
     TxnKind.supplierPay,
     TxnKind.receiveFromProject,
     TxnKind.walletTransfer,
@@ -50,6 +51,7 @@ class TransactionPickerScreen extends StatelessWidget {
   IconData _iconFor(TxnKind k) => switch (k) {
         TxnKind.materialBuy => Icons.inventory_2,
         TxnKind.labourPayment => Icons.engineering,
+        TxnKind.labourCredit => Icons.handyman,
         TxnKind.supplierPay => Icons.payments,
         TxnKind.receiveFromProject => Icons.account_balance_wallet,
         TxnKind.walletTransfer => Icons.swap_horiz,

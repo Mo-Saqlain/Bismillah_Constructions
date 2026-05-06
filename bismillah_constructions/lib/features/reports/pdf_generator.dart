@@ -55,10 +55,19 @@ class SupplierLedgerData {
   final String supplierName;
   final List<JournalEntry> rows;
   final DateTime generatedAt;
+  /// Human-readable period label ("All dates", "1 Jan 2025 → 31 Mar 2025").
+  /// Surfaced under the title on the printed PDF so the report is unambiguous
+  /// about what window of activity it covers (FBR audits expect this).
+  final String period;
+  /// Optional party identification (NTN / CNIC / category) — printed in the
+  /// header for FBR-style ledgers. Pass an empty string to omit.
+  final String partyMeta;
   SupplierLedgerData({
     required this.supplierName,
     required this.rows,
     required this.generatedAt,
+    this.period = 'All dates',
+    this.partyMeta = '',
   });
 }
 
@@ -66,10 +75,12 @@ class BankLedgerData {
   final String bankName;
   final List<JournalEntry> rows;
   final DateTime generatedAt;
+  final String period;
   BankLedgerData({
     required this.bankName,
     required this.rows,
     required this.generatedAt,
+    this.period = 'All dates',
   });
 }
 
@@ -77,10 +88,25 @@ class ProjectLedgerData {
   final String projectName;
   final List<JournalEntry> rows;
   final DateTime generatedAt;
+  final String period;
   ProjectLedgerData({
     required this.projectName,
     required this.rows,
     required this.generatedAt,
+    this.period = 'All dates',
+  });
+}
+
+class WorkerLedgerData {
+  final String workerName;
+  final List<JournalEntry> rows;
+  final DateTime generatedAt;
+  final String period;
+  WorkerLedgerData({
+    required this.workerName,
+    required this.rows,
+    required this.generatedAt,
+    this.period = 'All dates',
   });
 }
 
@@ -236,7 +262,7 @@ class PdfGenerator {
     final doc = pw.Document();
     double running = 0;
     final tableRows = <List<String>>[
-      ['Date', 'Memo', 'Debit (in)', 'Credit (out)', 'Balance'],
+      ['Date', 'Particulars', 'Debit (in)', 'Credit (out)', 'Balance'],
     ];
     for (final r in d.rows) {
       running += r.debit - r.credit;
@@ -251,7 +277,7 @@ class PdfGenerator {
     doc.addPage(pw.MultiPage(
       build: (ctx) => [
         _header('Bank / Wallet Ledger',
-            '${d.bankName}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+            '${d.bankName}  ·  Period: ${d.period}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
           headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
@@ -282,7 +308,7 @@ class PdfGenerator {
     final doc = pw.Document();
     double running = 0;
     final tableRows = <List<String>>[
-      ['Date', 'Memo', 'Debit', 'Credit', 'Running'],
+      ['Date', 'Particulars', 'Debit', 'Credit', 'Running'],
     ];
     // The repository already filtered to project-attributable rows
     // (Material/Labour costs as debits, Project Revenue / Service Fee as
@@ -300,7 +326,7 @@ class PdfGenerator {
     doc.addPage(pw.MultiPage(
       build: (ctx) => [
         _header('Project Ledger',
-            '${d.projectName}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+            '${d.projectName}  ·  Period: ${d.period}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
           headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
@@ -325,7 +351,7 @@ class PdfGenerator {
     final doc = pw.Document();
     double running = 0;
     final tableRows = <List<String>>[
-      ['Date', 'Description', 'Debit', 'Credit', 'Balance'],
+      ['Date', 'Particulars', 'Debit', 'Credit', 'Balance'],
     ];
     for (final r in d.rows) {
       // For supplier payables: credits increase, debits decrease.
@@ -339,10 +365,15 @@ class PdfGenerator {
       ]);
     }
 
+    final subtitle = StringBuffer(d.supplierName);
+    if (d.partyMeta.isNotEmpty) subtitle.write('  ·  ${d.partyMeta}');
+    subtitle
+      ..write('  ·  Period: ${d.period}')
+      ..write('  ·  Generated ${fmtDateTime(d.generatedAt)}');
+
     doc.addPage(pw.MultiPage(
       build: (ctx) => [
-        _header('Supplier Ledger',
-            '${d.supplierName}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+        _header('Supplier Ledger', subtitle.toString()),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
           headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
@@ -361,6 +392,58 @@ class PdfGenerator {
         pw.Align(
           alignment: pw.Alignment.centerRight,
           child: pw.Text('Net Outstanding: ${fmtMoney(running)}',
+              style: pw.TextStyle(
+                  fontSize: 14, fontWeight: pw.FontWeight.bold)),
+        ),
+      ],
+    ));
+    return doc.save();
+  }
+
+  // ---------------- Wage Ledger ----------------
+
+  static Future<void> previewWorkerLedger(WorkerLedgerData d) =>
+      Printing.layoutPdf(
+        onLayout: (PdfPageFormat f) => _buildWorkerLedger(d),
+        name: 'Wage Ledger — ${d.workerName}',
+      );
+
+  static Future<Uint8List> _buildWorkerLedger(WorkerLedgerData d) async {
+    final doc = pw.Document();
+    double running = 0;
+    final tableRows = <List<String>>[
+      ['Date', 'Particulars', 'Debit (Wages)', 'Balance'],
+    ];
+    for (final r in d.rows) {
+      running += r.debit;
+      tableRows.add([
+        fmtDate(r.createdAt),
+        r.description ?? '—',
+        fmtMoney(r.debit),
+        fmtMoney(running),
+      ]);
+    }
+    doc.addPage(pw.MultiPage(
+      build: (ctx) => [
+        _header('Wage Ledger',
+            '${d.workerName}  ·  Period: ${d.period}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+        pw.SizedBox(height: 12),
+        pw.TableHelper.fromTextArray(
+          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          headerDecoration:
+              const pw.BoxDecoration(color: PdfColors.grey200),
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerLeft,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+          },
+          data: tableRows,
+        ),
+        pw.SizedBox(height: 16),
+        pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text('Total Wages: ${fmtMoney(running)}',
               style: pw.TextStyle(
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
         ),

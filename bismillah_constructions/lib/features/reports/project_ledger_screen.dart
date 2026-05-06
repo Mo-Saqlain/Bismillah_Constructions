@@ -7,6 +7,7 @@ import '../../data/models/journal_entry.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
 import 'csv_export.dart';
 import 'pdf_generator.dart';
@@ -62,17 +63,23 @@ class ProjectLedgerPickerScreen extends ConsumerWidget {
   }
 }
 
-class ProjectLedgerScreen extends ConsumerWidget {
+class ProjectLedgerScreen extends ConsumerStatefulWidget {
   const ProjectLedgerScreen({super.key, required this.project});
   final Project project;
 
-  /// Each entry from `entriesForProject` is already the project-attributable
-  /// leg (Material/Labour Costs as a debit, Project Revenue / Service Fee as
-  /// a credit). We render them as-is and accumulate the running net cost
-  /// position: costs push it positive, revenue pulls it negative.
-  ///
-  /// The memo prefers the user's description and falls back to the account
-  /// name (so a row never reads as a bare amount).
+  @override
+  ConsumerState<ProjectLedgerScreen> createState() =>
+      _ProjectLedgerScreenState();
+}
+
+class _ProjectLedgerScreenState extends ConsumerState<ProjectLedgerScreen> {
+  DateTime? _from;
+  DateTime? _to;
+
+  /// Each row in `entries` is already the project-attributable leg
+  /// (Material/Labour Costs as a debit, Project Revenue / Service Fee as
+  /// a credit). We render them in order and accumulate the running net
+  /// cost-side position.
   List<LedgerRow> _toRows(List<JournalEntry> entries) {
     double running = 0;
     return entries.map((e) {
@@ -92,54 +99,73 @@ class ProjectLedgerScreen extends ConsumerWidget {
 
   Future<void> _exportPdf(List<JournalEntry> entries) async {
     await PdfGenerator.previewProjectLedger(ProjectLedgerData(
-      projectName: project.name,
+      projectName: widget.project.name,
       rows: entries,
       generatedAt: DateTime.now(),
+      period: formatPeriod(_from, _to),
     ));
   }
 
   Future<void> _exportCsv(List<JournalEntry> entries) async {
     final rows = _toRows(entries);
     final csv = CsvExport.build(
-      headers: ['Date', 'Memo', 'Debit', 'Credit', 'Running'],
-      rows: rows
-          .map((r) => [
-                fmtDate(r.date),
-                r.memo,
-                r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
-                r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
-                r.balance.toStringAsFixed(2),
-              ])
-          .toList(),
+      headers: const [
+        'Date',
+        'Particulars',
+        'Debit',
+        'Credit',
+        'Running'
+      ],
+      rows: [
+        ['Period:', formatPeriod(_from, _to), '', '', ''],
+        ['', '', '', '', ''],
+        ...rows.map((r) => [
+              fmtDate(r.date),
+              r.memo,
+              r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
+              r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
+              r.balance.toStringAsFixed(2),
+            ]),
+      ],
     );
     await CsvExport.share(
       fileName:
-          'project_ledger_${project.name}_${DateTime.now().millisecondsSinceEpoch}',
+          'project_ledger_${widget.project.name}_${DateTime.now().millisecondsSinceEpoch}',
       csv: csv,
-      subject: 'Project Ledger — ${project.name}',
+      subject: 'Project Ledger — ${widget.project.name}',
     );
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     ref.watch(ledgerVersionProvider);
-    final entriesAsync = ref.watch(_projectEntriesProvider(project.id));
+    final entriesAsync = ref.watch(_projectEntriesProvider(_FilterKey(
+      projectId: widget.project.id,
+      from: _from,
+      to: _to,
+    )));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Ledger · ${project.name}'),
+        title: Text('Ledger · ${widget.project.name}'),
         actions: [
           LedgerExportActions(
             enabled: entriesAsync.hasValue &&
                 (entriesAsync.value?.isNotEmpty ?? false),
             onExportPdf: () async {
-              final e = await ref
-                  .read(_projectEntriesProvider(project.id).future);
+              final e = await ref.read(_projectEntriesProvider(_FilterKey(
+                projectId: widget.project.id,
+                from: _from,
+                to: _to,
+              )).future);
               await _exportPdf(e);
             },
             onExportCsv: () async {
-              final e = await ref
-                  .read(_projectEntriesProvider(project.id).future);
+              final e = await ref.read(_projectEntriesProvider(_FilterKey(
+                projectId: widget.project.id,
+                from: _from,
+                to: _to,
+              )).future);
               await _exportCsv(e);
             },
           ),
@@ -151,14 +177,23 @@ class ProjectLedgerScreen extends ConsumerWidget {
           final rows = _toRows(entries);
           final total = rows.isEmpty ? 0.0 : rows.last.balance;
           return LedgerView(
-            title: project.name,
-            subtitle: '${project.model.label}'
-                '${project.clientName != null ? ' · ${project.clientName}' : ''}',
+            title: widget.project.name,
+            subtitle: '${widget.project.model.label}'
+                '${widget.project.clientName != null ? ' · ${widget.project.clientName}' : ''}'
+                ' · Period: ${formatPeriod(_from, _to)}',
             rows: rows,
             totalLabel: 'Net Cost-Side Position',
             totalValue: total,
             signedTotal: true,
-            emptyMessage: 'No transactions for this project yet.',
+            emptyMessage: 'No transactions for this project in the period.',
+            headerBelowTitle: DateRangeBar(
+              from: _from,
+              to: _to,
+              onChanged: (f, t) => setState(() {
+                _from = f;
+                _to = t;
+              }),
+            ),
           );
         },
       ),
@@ -166,9 +201,29 @@ class ProjectLedgerScreen extends ConsumerWidget {
   }
 }
 
+/// Composite cache key so each (project, from, to) triple is its own
+/// FutureProvider instance — refreshing one window doesn't invalidate
+/// every other open project ledger.
+class _FilterKey {
+  final String projectId;
+  final DateTime? from;
+  final DateTime? to;
+  const _FilterKey({required this.projectId, this.from, this.to});
+
+  @override
+  bool operator ==(Object other) =>
+      other is _FilterKey &&
+      other.projectId == projectId &&
+      other.from == from &&
+      other.to == to;
+
+  @override
+  int get hashCode => Object.hash(projectId, from, to);
+}
+
 final _projectEntriesProvider =
-    FutureProvider.family<List<JournalEntry>, String>((ref, projectId) async {
+    FutureProvider.family<List<JournalEntry>, _FilterKey>((ref, key) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(ledgerRepoProvider.future);
-  return repo.entriesForProject(projectId);
+  return repo.entriesForProject(key.projectId, from: key.from, to: key.to);
 });

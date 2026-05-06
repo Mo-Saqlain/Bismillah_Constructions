@@ -603,8 +603,6 @@ class EntityRepository {
     UomType? uomType,
     String? uom,
     double? coverageRate,
-    double? wasteFactor,
-    int? leadDays,
     MaterialDims? dims,
   }) async {
     final clean = name.trim();
@@ -629,8 +627,6 @@ class EntityRepository {
       uomType: uomType,
       uom: uom,
       coverageRate: coverageRate,
-      wasteFactor: wasteFactor,
-      leadDays: leadDays,
       dims: dims,
       createdAt: DateTime.now().toUtc(),
     );
@@ -650,8 +646,6 @@ class EntityRepository {
     Object? uomType = _unset,
     Object? uom = _unset,
     Object? coverageRate = _unset,
-    Object? wasteFactor = _unset,
-    Object? leadDays = _unset,
     Object? dims = _unset,
   }) async {
     final patch = <String, Object?>{};
@@ -669,12 +663,6 @@ class EntityRepository {
     }
     if (!identical(coverageRate, _unset)) {
       patch['cov_rate'] = coverageRate as double?;
-    }
-    if (!identical(wasteFactor, _unset)) {
-      patch['waste_f'] = wasteFactor as double?;
-    }
-    if (!identical(leadDays, _unset)) {
-      patch['lead_d'] = leadDays as int?;
     }
     if (!identical(dims, _unset)) {
       final d = dims as MaterialDims?;

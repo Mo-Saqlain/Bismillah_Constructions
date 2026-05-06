@@ -153,6 +153,7 @@ extension MaterialTxnTypeX on MaterialTxnType {
 enum TxnKind {
   materialBuy,         // Dr Material Costs / Cr Supplier Payables (project mandatory)
   labourPayment,       // Dr Labour Costs / Cr Cash|Bank  (project mandatory)
+  labourCredit,        // Dr Labour Costs / Cr Supplier Payables (wages incurred but not yet paid)
   supplierPay,         // Dr Supplier Payables / Cr Cash|Bank
   receiveFromProject,  // Dr Cash|Bank / Cr Project Revenue (direct receipt — no receivable phase)
   walletTransfer,      // Dr destination wallet / Cr source wallet
@@ -164,7 +165,8 @@ extension TxnKindX on TxnKind {
   String get label => switch (this) {
         TxnKind.materialBuy => 'Material Buy (Credit)',
         TxnKind.labourPayment => 'Labour Payment',
-        TxnKind.supplierPay => 'Material Payment',
+        TxnKind.labourCredit => 'Labour on Credit',
+        TxnKind.supplierPay => 'Supplier / Worker Payment',
         TxnKind.receiveFromProject => 'Receive from Project',
         TxnKind.walletTransfer => 'Wallet Transfer',
         TxnKind.personalDraw => 'Personal / Daily Draw',
@@ -175,8 +177,10 @@ extension TxnKindX on TxnKind {
           'Buy material on credit from a supplier (project required)',
         TxnKind.labourPayment =>
           'Pay a labour provider for a project (project required)',
+        TxnKind.labourCredit =>
+          'Record wages owed to labour but not yet paid — count of workers + total pay',
         TxnKind.supplierPay =>
-          'Settle a payable to a material supplier from cash or bank',
+          'Settle a payable to a material or labour supplier from cash or bank',
         TxnKind.receiveFromProject =>
           'Receive money from the project — booked as project revenue',
         TxnKind.walletTransfer =>

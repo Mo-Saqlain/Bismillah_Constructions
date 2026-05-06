@@ -137,6 +137,27 @@ class LedgerRepository {
     );
   }
 
+  /// Wages incurred but not yet paid. Posts Dr Labour Costs / Cr Supplier
+  /// Payables — symmetric to [postMaterialBuy] but for labour.
+  ///
+  /// The cost hits the project ledger immediately (via Labour Costs); the
+  /// payable to the worker shows up on their supplier ledger and is settled
+  /// later by [postSupplierPay] when cash actually leaves.
+  Future<String> postLabourCredit({
+    required double amount,
+    required String projectId,
+    required String supplierId,
+    String? description,
+  }) =>
+      _post(
+        debitAccount: Accounts.labourCosts,
+        creditAccount: Accounts.supplierPayables,
+        amount: amount,
+        projectId: projectId,
+        supplierId: supplierId,
+        description: description,
+      );
+
   Future<String> postSupplierPay({
     required double amount,
     required String supplierId,
@@ -444,12 +465,25 @@ class LedgerRepository {
   }
 
   Future<List<JournalEntry>> entriesForSupplier(String supplierId,
-      {String? projectId, bool includeDeleted = false}) async {
+      {String? projectId,
+      DateTime? from,
+      DateTime? to,
+      bool includeDeleted = false}) async {
     final where = StringBuffer('supplier_id = ?');
     final args = <Object>[supplierId];
     if (projectId != null) {
       where.write(' AND project_id = ?');
       args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      // Inclusive upper bound: bump to next-day midnight so transactions
+      // dated on `to` itself are included regardless of their time-of-day.
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     if (!includeDeleted) where.write(' AND is_deleted = 0');
     final rows = await _db.query('journal_entries',
@@ -472,11 +506,22 @@ class LedgerRepository {
 
   /// Every journal row that touches a specific account (typically a bank /
   /// wallet id), oldest → newest. Used by the bank ledger report to build a
-  /// running balance.
+  /// running balance. Optional [from]/[to] filters narrow to a date window
+  /// inclusive on both ends.
   Future<List<JournalEntry>> entriesForAccount(String accountId,
-      {bool includeDeleted = false}) async {
+      {DateTime? from,
+      DateTime? to,
+      bool includeDeleted = false}) async {
     final where = StringBuffer('account_id = ?');
     final args = <Object>[accountId];
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
     if (!includeDeleted) where.write(' AND is_deleted = 0');
     final rows = await _db.query('journal_entries',
         where: where.toString(),
@@ -503,7 +548,9 @@ class LedgerRepository {
   ///   * Receive From Project / Service Fee land in the credit column and
   ///     properly reduce the project's net cost-side position.
   Future<List<JournalEntry>> entriesForProject(String projectId,
-      {bool includeDeleted = false}) async {
+      {DateTime? from,
+      DateTime? to,
+      bool includeDeleted = false}) async {
     const projectAccountIds = <String>[
       'MATERIAL_COSTS',
       'LABOUR_COSTS',
@@ -513,12 +560,155 @@ class LedgerRepository {
     final where = StringBuffer(
         'project_id = ? AND account_id IN (${projectAccountIds.map((_) => '?').join(', ')})');
     final args = <Object>[projectId, ...projectAccountIds];
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
     if (!includeDeleted) where.write(' AND is_deleted = 0');
     final rows = await _db.query('journal_entries',
         where: where.toString(),
         whereArgs: args,
         orderBy: 'created_at ASC');
     return rows.map(JournalEntry.fromMap).toList();
+  }
+
+  /// Wage ledger feed: every Labour Costs debit charged against this
+  /// supplier (worker). Mirrors [entriesForProject]'s account-filter
+  /// approach so payments to other suppliers don't leak in.
+  Future<List<JournalEntry>> entriesForWorker(String supplierId,
+      {DateTime? from,
+      DateTime? to,
+      bool includeDeleted = false}) async {
+    final where = StringBuffer(
+        'supplier_id = ? AND account_id = ? AND debit > 0');
+    final args = <Object>[supplierId, Accounts.labourCosts.id];
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
+    if (!includeDeleted) where.write(' AND is_deleted = 0');
+    final rows = await _db.query('journal_entries',
+        where: where.toString(),
+        whereArgs: args,
+        orderBy: 'created_at ASC');
+    return rows.map(JournalEntry.fromMap).toList();
+  }
+
+  /// Comprehensive cash flow summary across every cash-like account
+  /// (Cash + Supervisor Float + every user bank). Bucketed into operating
+  /// vs financing activities so the report follows the FBR-style indirect
+  /// cash-flow layout. Optional [from]/[to] window applies to all cash
+  /// movements; the opening balance is the cash position right before
+  /// [from] (or zero if no `from` is set).
+  ///
+  /// Categorisation rule (driven by the OTHER side of each cash leg):
+  ///   * Operating inflow  ← Project Revenue, Service Fee Income credits
+  ///   * Operating outflow ← Material Costs / Labour Costs debits, Supplier
+  ///     Payables debits (settlements of trade liabilities)
+  ///   * Financing outflow ← Personal / Daily Draw debits
+  ///   * Other             ← anything else (opening balances etc.)
+  /// Wallet transfers are ignored — the cash leaves one cash-like account
+  /// and lands in another, so the consolidated cash position doesn't move.
+  Future<CashFlowSummary> cashFlowSummary({DateTime? from, DateTime? to}) async {
+    final cashIds = await cashLikeAccountIds();
+    if (cashIds.isEmpty) return CashFlowSummary.empty;
+
+    final placeholders = cashIds.map((_) => '?').join(', ');
+
+    Future<double> openingBalance() async {
+      if (from == null) return 0;
+      final r = await _db.rawQuery(
+        'SELECT COALESCE(SUM(debit),0) - COALESCE(SUM(credit),0) AS bal '
+        'FROM journal_entries '
+        'WHERE is_deleted = 0 AND account_id IN ($placeholders) '
+        'AND created_at < ?',
+        [...cashIds, from.toUtc().toIso8601String()],
+      );
+      return ((r.first['bal'] as num?) ?? 0).toDouble();
+    }
+
+    // Pull every cash-leg row in the period and read its sibling on the same
+    // transaction_id to discover what the cash exchanged for.
+    final whereClauses = <String>[
+      'is_deleted = 0',
+      'account_id IN ($placeholders)',
+    ];
+    final args = <Object>[...cashIds];
+    if (from != null) {
+      whereClauses.add('created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      whereClauses.add('created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
+    final cashRows = await _db.rawQuery(
+      'SELECT transaction_id, debit, credit FROM journal_entries '
+      'WHERE ${whereClauses.join(' AND ')}',
+      args,
+    );
+
+    double opIn = 0, opOut = 0, finOut = 0, other = 0;
+
+    for (final row in cashRows) {
+      final txnId = row['transaction_id'] as String;
+      final dr = (row['debit'] as num).toDouble();
+      final cr = (row['credit'] as num).toDouble();
+      final delta = dr - cr; // + = cash in, − = cash out
+
+      // Find the sibling (the non-cash leg of this transaction).
+      final sibling = await _db.rawQuery(
+        'SELECT account_id FROM journal_entries '
+        'WHERE transaction_id = ? AND account_id NOT IN ($placeholders) '
+        'AND is_deleted = 0 LIMIT 1',
+        [txnId, ...cashIds],
+      );
+      if (sibling.isEmpty) {
+        // Wallet transfer — both sides are cash-like; skip so we don't
+        // double-count the same money.
+        continue;
+      }
+      final otherAccount = sibling.first['account_id'] as String;
+
+      switch (otherAccount) {
+        case 'PROJECT_REV':
+        case 'SERVICE_FEE':
+          opIn += delta; // cash in from operations
+        case 'MATERIAL_COSTS':
+        case 'LABOUR_COSTS':
+        case 'SUPPLIER_PAY':
+          opOut += -delta; // outflow stored as positive number
+        case 'PERSONAL_DRAW':
+          finOut += -delta;
+        case 'OWNERS_EQUITY':
+          // Opening balance for a bank: counts as financing inflow if cash
+          // came in, or financing outflow if money was drawn against equity.
+          if (delta >= 0) {
+            opIn += delta;
+          } else {
+            finOut += -delta;
+          }
+        default:
+          other += delta;
+      }
+    }
+
+    final opening = await openingBalance();
+    return CashFlowSummary(
+      openingCash: opening,
+      operatingInflow: opIn,
+      operatingOutflow: opOut,
+      financingOutflow: finOut,
+      otherNet: other,
+    );
   }
 
   /// Sum(debit) - sum(credit). Always excludes soft-deleted rows.
@@ -871,6 +1061,44 @@ class MonthlyCashFlow {
   final Map<String, double> perAccount;
   const MonthlyCashFlow({required this.month, required this.perAccount});
   double get total => perAccount.values.fold(0, (a, b) => a + b);
+}
+
+/// Indirect-method cash flow summary across every cash-like account.
+///
+/// All `*flow` and `*Outflow` numbers are stored as positive values;
+/// the sign is implicit from the field name. `netChange` walks
+/// opening cash → closing cash through the bucketed activity totals.
+class CashFlowSummary {
+  /// Cash position at the moment the period opened (sum of all cash-like
+  /// account balances right before `from`). Zero when no `from` is set.
+  final double openingCash;
+  final double operatingInflow;
+  final double operatingOutflow;
+  final double financingOutflow;
+  /// Catch-all for cash legs whose sibling didn't land in any of the
+  /// canonical buckets — e.g. legacy data, manual journal corrections.
+  final double otherNet;
+
+  const CashFlowSummary({
+    required this.openingCash,
+    required this.operatingInflow,
+    required this.operatingOutflow,
+    required this.financingOutflow,
+    required this.otherNet,
+  });
+
+  static const empty = CashFlowSummary(
+    openingCash: 0,
+    operatingInflow: 0,
+    operatingOutflow: 0,
+    financingOutflow: 0,
+    otherNet: 0,
+  );
+
+  double get netOperating => operatingInflow - operatingOutflow;
+  double get netFinancing => -financingOutflow;
+  double get netChange => netOperating + netFinancing + otherNet;
+  double get closingCash => openingCash + netChange;
 }
 
 class WageRegisterLine {

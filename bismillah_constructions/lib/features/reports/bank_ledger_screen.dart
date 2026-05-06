@@ -6,6 +6,7 @@ import '../../data/models/bank.dart';
 import '../../data/models/journal_entry.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
 import 'csv_export.dart';
 import 'pdf_generator.dart';
@@ -28,7 +29,7 @@ class BankLedgerPickerScreen extends ConsumerWidget {
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                    'No banks or wallets yet. Add one from Settings → Banks & Wallets.'),
+                    'No banks or wallets yet. Add one from Manage → Wallets & Banks.'),
               ),
             );
           }
@@ -65,9 +66,17 @@ class BankLedgerPickerScreen extends ConsumerWidget {
 
 /// Per-bank ledger: every journal entry that touched this bank/wallet, with a
 /// running balance (debits − credits = positive cash). Exports to PDF and CSV.
-class BankLedgerScreen extends ConsumerWidget {
+class BankLedgerScreen extends ConsumerStatefulWidget {
   const BankLedgerScreen({super.key, required this.bank});
   final Bank bank;
+
+  @override
+  ConsumerState<BankLedgerScreen> createState() => _BankLedgerScreenState();
+}
+
+class _BankLedgerScreenState extends ConsumerState<BankLedgerScreen> {
+  DateTime? _from;
+  DateTime? _to;
 
   /// Convert raw journal entries into LedgerRows with a running balance
   /// (debits = inflows for an asset account).
@@ -85,52 +94,80 @@ class BankLedgerScreen extends ConsumerWidget {
     }).toList();
   }
 
-  Future<void> _exportPdf(WidgetRef ref) async {
-    final entries = await ref.read(_bankEntriesProvider(bank.id).future);
+  Future<void> _exportPdf(List<JournalEntry> entries) async {
     await PdfGenerator.previewBankLedger(BankLedgerData(
-      bankName: bank.name,
+      bankName: widget.bank.name,
       rows: entries,
       generatedAt: DateTime.now(),
+      period: formatPeriod(_from, _to),
     ));
   }
 
-  Future<void> _exportCsv(WidgetRef ref) async {
-    final entries = await ref.read(_bankEntriesProvider(bank.id).future);
+  Future<void> _exportCsv(List<JournalEntry> entries) async {
     final rows = _toRows(entries);
     final csv = CsvExport.build(
-      headers: ['Date', 'Memo', 'Debit (in)', 'Credit (out)', 'Balance'],
-      rows: rows
-          .map((r) => [
-                fmtDate(r.date),
-                r.memo,
-                r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
-                r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
-                r.balance.toStringAsFixed(2),
-              ])
-          .toList(),
+      headers: const [
+        'Date',
+        'Particulars',
+        'Debit (in)',
+        'Credit (out)',
+        'Balance'
+      ],
+      rows: [
+        ['Account:', widget.bank.name, '', '', ''],
+        if (widget.bank.accountNo != null)
+          ['Acct No:', widget.bank.accountNo!, '', '', ''],
+        ['Period:', formatPeriod(_from, _to), '', '', ''],
+        ['', '', '', '', ''],
+        ...rows.map((r) => [
+              fmtDate(r.date),
+              r.memo,
+              r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
+              r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
+              r.balance.toStringAsFixed(2),
+            ]),
+      ],
     );
     await CsvExport.share(
       fileName:
-          'bank_ledger_${bank.name}_${DateTime.now().millisecondsSinceEpoch}',
+          'bank_ledger_${widget.bank.name}_${DateTime.now().millisecondsSinceEpoch}',
       csv: csv,
-      subject: 'Bank Ledger — ${bank.name}',
+      subject: 'Bank Ledger — ${widget.bank.name}',
     );
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     ref.watch(ledgerVersionProvider);
-    final entriesAsync = ref.watch(_bankEntriesProvider(bank.id));
+    final entriesAsync = ref.watch(_bankEntriesProvider(_BankFilterKey(
+      bankId: widget.bank.id,
+      from: _from,
+      to: _to,
+    )));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Ledger · ${bank.name}'),
+        title: Text('Ledger · ${widget.bank.name}'),
         actions: [
           LedgerExportActions(
             enabled: entriesAsync.hasValue &&
                 (entriesAsync.value?.isNotEmpty ?? false),
-            onExportPdf: () => _exportPdf(ref),
-            onExportCsv: () => _exportCsv(ref),
+            onExportPdf: () async {
+              final e = await ref.read(_bankEntriesProvider(_BankFilterKey(
+                bankId: widget.bank.id,
+                from: _from,
+                to: _to,
+              )).future);
+              await _exportPdf(e);
+            },
+            onExportCsv: () async {
+              final e = await ref.read(_bankEntriesProvider(_BankFilterKey(
+                bankId: widget.bank.id,
+                from: _from,
+                to: _to,
+              )).future);
+              await _exportCsv(e);
+            },
           ),
         ],
       ),
@@ -140,15 +177,24 @@ class BankLedgerScreen extends ConsumerWidget {
           final rows = _toRows(entries);
           final total = rows.isEmpty ? 0.0 : rows.last.balance;
           return LedgerView(
-            title: bank.name,
-            subtitle: bank.accountNo == null ? '' : 'Acct ${bank.accountNo}',
+            title: widget.bank.name,
+            subtitle: '${widget.bank.accountNo == null ? '' : 'Acct ${widget.bank.accountNo} · '}'
+                'Period: ${formatPeriod(_from, _to)}',
             rows: rows,
             totalLabel: 'Net Balance',
             totalValue: total,
             signedTotal: true,
             debitHeader: 'Dr (in)',
             creditHeader: 'Cr (out)',
-            emptyMessage: 'No transactions for this account yet.',
+            emptyMessage: 'No transactions for this account in the period.',
+            headerBelowTitle: DateRangeBar(
+              from: _from,
+              to: _to,
+              onChanged: (f, t) => setState(() {
+                _from = f;
+                _to = t;
+              }),
+            ),
           );
         },
       ),
@@ -156,9 +202,26 @@ class BankLedgerScreen extends ConsumerWidget {
   }
 }
 
+class _BankFilterKey {
+  final String bankId;
+  final DateTime? from;
+  final DateTime? to;
+  const _BankFilterKey({required this.bankId, this.from, this.to});
+
+  @override
+  bool operator ==(Object other) =>
+      other is _BankFilterKey &&
+      other.bankId == bankId &&
+      other.from == from &&
+      other.to == to;
+
+  @override
+  int get hashCode => Object.hash(bankId, from, to);
+}
+
 final _bankEntriesProvider =
-    FutureProvider.family<List<JournalEntry>, String>((ref, bankId) async {
+    FutureProvider.family<List<JournalEntry>, _BankFilterKey>((ref, key) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(ledgerRepoProvider.future);
-  return repo.entriesForAccount(bankId);
+  return repo.entriesForAccount(key.bankId, from: key.from, to: key.to);
 });

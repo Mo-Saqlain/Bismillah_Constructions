@@ -86,18 +86,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Import this backup?'),
-          content: Text(
-              'The current local database will be REPLACED with:\n\n${picked.name}\n\n'
-              'Your existing DB will be saved as "<dbfile>.before_import" so you can roll back.\n\n'
-              'You must restart the app after import to load the new data.'),
+          icon: Icon(Icons.warning_amber,
+              color: Theme.of(ctx).colorScheme.error, size: 36),
+          title: const Text('Replace your current database?'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Importing "${picked.name}" will:'),
+                const SizedBox(height: 12),
+                const _BulletLine(
+                    'WIPE every transaction, project, supplier, bank, '
+                    'wallet, material type and setting that is currently '
+                    'in this app.'),
+                const _BulletLine(
+                    'REPLACE all of it with whatever the picked .db file '
+                    'contains. The import is a full overwrite, not a '
+                    'merge — anything not in the picked file is gone.'),
+                const _BulletLine(
+                    'Save your existing database as a "<dbfile>.before_import" '
+                    'snapshot first, so you can use Settings → "Undo last '
+                    'import" to roll back if you change your mind.'),
+                const _BulletLine(
+                    'Require an app restart afterwards to load the new data.'),
+                const SizedBox(height: 12),
+                Text(
+                  'Only proceed if you trust this .db file and you have '
+                  'already exported anything you might want to keep from '
+                  'the current install.',
+                  style: TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Cancel')),
             FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(ctx).colorScheme.error,
+                    foregroundColor: Theme.of(ctx).colorScheme.onError),
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Import')),
+                child: const Text('Replace database')),
           ],
         ),
       );
@@ -383,6 +417,30 @@ class _SectionTitle extends StatelessWidget {
                 .labelLarge
                 ?.copyWith(color: Theme.of(context).colorScheme.primary)),
       );
+}
+
+/// Bullet row used in the Import warning dialog. Pulled out so the dialog
+/// stays readable and indents stay consistent across all four bullets.
+class _BulletLine extends StatelessWidget {
+  const _BulletLine(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 6, right: 8),
+            child: Icon(Icons.circle, size: 6),
+          ),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
+  }
 }
 
 class _ThemeOption extends StatelessWidget {

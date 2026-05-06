@@ -7,8 +7,8 @@ import '../../providers/providers.dart';
 import '../common/async_view.dart';
 
 /// Lets the user manage the categories that appear in the Buy Material
-/// transaction form, plus their procurement metadata (UOM, coverage rate,
-/// waste factor, lead time, physical dimensions).
+/// transaction form, plus their procurement metadata (UOM class, unit,
+/// coverage rate, physical dimensions).
 ///
 /// Built-in rows (the original five seeded by the v7 migration) can be
 /// renamed and have their metadata edited but cannot be deleted —
@@ -34,8 +34,6 @@ class MaterialTypesScreen extends ConsumerWidget {
           uomType: result.uomType,
           uom: result.uom,
           coverageRate: result.coverageRate,
-          wasteFactor: result.wasteFactor,
-          leadDays: result.leadDays,
           dims: result.dims,
         );
       } else {
@@ -45,8 +43,6 @@ class MaterialTypesScreen extends ConsumerWidget {
           uomType: result.uomType,
           uom: result.uom,
           coverageRate: result.coverageRate,
-          wasteFactor: result.wasteFactor,
-          leadDays: result.leadDays,
           dims: result.dims,
         );
       }
@@ -166,8 +162,8 @@ class MaterialTypesScreen extends ConsumerWidget {
   }
 }
 
-/// Compact one-liner under the title: shown on the list to give a
-/// procurement-fingerprint at a glance ("Surf · SQFT · cov 4.0 · waste 1.10").
+/// Compact one-liner under the title — gives a procurement-fingerprint at
+/// a glance. Spelled out: "Built-in · Surface · Square Feet · coverage 4.0".
 class _SubtitleSummary extends StatelessWidget {
   const _SubtitleSummary({required this.row});
   final MaterialTypeDef row;
@@ -176,12 +172,9 @@ class _SubtitleSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final parts = <String>[
       row.isBuiltin ? 'Built-in' : 'Custom',
-      if (row.uomType != null) row.uomType!.short,
+      if (row.uomType != null) row.uomType!.label,
       if (row.uom != null && row.uom!.isNotEmpty) row.uom!,
-      if (row.coverageRate != null) 'cov ${row.coverageRate}',
-      if (row.wasteFactor != null)
-        'waste ${row.wasteFactor!.toStringAsFixed(2)}',
-      if (row.leadDays != null) 'lead ${row.leadDays}d',
+      if (row.coverageRate != null) 'coverage ${row.coverageRate}',
     ];
     return Text(parts.join(' · '),
         maxLines: 2, overflow: TextOverflow.ellipsis);
@@ -203,8 +196,6 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
   late final TextEditingController _name;
   late final TextEditingController _uom;
   late final TextEditingController _cov;
-  late final TextEditingController _waste;
-  late final TextEditingController _lead;
   late final TextEditingController _dimL;
   late final TextEditingController _dimW;
   late final TextEditingController _dimH;
@@ -220,9 +211,6 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
     _uom = TextEditingController(text: r?.uom ?? '');
     _cov = TextEditingController(
         text: r?.coverageRate?.toString() ?? '');
-    _waste = TextEditingController(
-        text: r?.wasteFactor?.toString() ?? '');
-    _lead = TextEditingController(text: r?.leadDays?.toString() ?? '');
     _dimL = TextEditingController(text: r?.dims?.length?.toString() ?? '');
     _dimW = TextEditingController(text: r?.dims?.width?.toString() ?? '');
     _dimH = TextEditingController(text: r?.dims?.height?.toString() ?? '');
@@ -232,17 +220,7 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
 
   @override
   void dispose() {
-    for (final c in [
-      _name,
-      _uom,
-      _cov,
-      _waste,
-      _lead,
-      _dimL,
-      _dimW,
-      _dimH,
-      _dimUnit
-    ]) {
+    for (final c in [_name, _uom, _cov, _dimL, _dimW, _dimH, _dimUnit]) {
       c.dispose();
     }
     super.dispose();
@@ -251,14 +229,13 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
   /// Defensive parser: blank → null, junk → null. Keeps the form forgiving.
   double? _parseDouble(TextEditingController c) =>
       double.tryParse(c.text.trim());
-  int? _parseInt(TextEditingController c) => int.tryParse(c.text.trim());
 
   void _submit() {
     final name = _name.text.trim();
     if (name.isEmpty) return;
 
     MaterialDims? dims;
-    if (_uomType == UomType.disc) {
+    if (_uomType == UomType.discrete) {
       final l = _parseDouble(_dimL);
       final w = _parseDouble(_dimW);
       final h = _parseDouble(_dimH);
@@ -280,9 +257,7 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
         uomType: _uomType,
         uom: _uom.text.trim().isEmpty ? null : _uom.text.trim(),
         coverageRate:
-            _uomType == UomType.surf ? _parseDouble(_cov) : null,
-        wasteFactor: _parseDouble(_waste),
-        leadDays: _parseInt(_lead),
+            _uomType == UomType.surface ? _parseDouble(_cov) : null,
         dims: dims,
       ),
     );
@@ -290,8 +265,8 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
 
   @override
   Widget build(BuildContext context) {
-    final isSurf = _uomType == UomType.surf;
-    final isDisc = _uomType == UomType.disc;
+    final isSurface = _uomType == UomType.surface;
+    final isDiscrete = _uomType == UomType.discrete;
     final initial = widget.initial;
     return Padding(
       padding: EdgeInsets.only(
@@ -321,19 +296,19 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
             DropdownButtonFormField<UomType?>(
               initialValue: _uomType,
               decoration: const InputDecoration(
-                labelText: 'UOM Class',
+                labelText: 'Unit of Measurement Class',
                 helperText: 'How this material is measured',
               ),
               items: [
                 const DropdownMenuItem(value: null, child: Text('— None —')),
                 ...UomType.values.map((t) => DropdownMenuItem(
-                    value: t, child: Text('${t.short} · ${t.label}'))),
+                    value: t, child: Text(t.label))),
               ],
               onChanged: (v) => setState(() {
                 _uomType = v;
-                // Picking a class suggests a default UOM if the field was
-                // blank — keeps data entry quick without overwriting an
-                // existing custom value.
+                // Picking a class suggests a default unit if the field
+                // was blank — keeps data entry quick without overwriting
+                // an existing custom value.
                 if (v != null && _uom.text.trim().isEmpty) {
                   _uom.text = v.defaultUoms.first;
                 }
@@ -343,13 +318,13 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
             TextField(
               controller: _uom,
               decoration: InputDecoration(
-                labelText: 'UOM',
+                labelText: 'Unit of Measurement',
                 hintText: _uomType == null
-                    ? 'EA / SQFT / CY / LBS …'
+                    ? 'Each, Square Feet, Cubic Yards, Pounds, …'
                     : _uomType!.defaultUoms.join(', '),
               ),
             ),
-            if (isSurf) ...[
+            if (isSurface) ...[
               const SizedBox(height: 12),
               TextField(
                 controller: _cov,
@@ -360,60 +335,30 @@ class _MaterialTypeFormState extends State<_MaterialTypeForm> {
                 ],
                 decoration: const InputDecoration(
                   labelText: 'Coverage rate',
-                  helperText: 'Units per area (only for Surface UOM)',
+                  helperText:
+                      'Units required per unit of area (Surface only)',
                 ),
               ),
             ],
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(
-                child: TextField(
-                  controller: _waste,
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                  ],
-                  decoration: const InputDecoration(
-                    labelText: 'Waste factor',
-                    hintText: '1.10',
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _lead,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                  ],
-                  decoration: const InputDecoration(
-                    labelText: 'Lead time (days)',
-                    hintText: '3',
-                  ),
-                ),
-              ),
-            ]),
-            if (isDisc) ...[
+            if (isDiscrete) ...[
               const SizedBox(height: 16),
               Text('Dimensions (optional)',
                   style: Theme.of(context).textTheme.labelLarge),
               const SizedBox(height: 8),
               Row(children: [
-                Expanded(child: _DimField(label: 'L', controller: _dimL)),
+                Expanded(child: _DimField(label: 'Length', controller: _dimL)),
                 const SizedBox(width: 8),
-                Expanded(child: _DimField(label: 'W', controller: _dimW)),
+                Expanded(child: _DimField(label: 'Width', controller: _dimW)),
                 const SizedBox(width: 8),
-                Expanded(child: _DimField(label: 'H', controller: _dimH)),
+                Expanded(child: _DimField(label: 'Height', controller: _dimH)),
                 const SizedBox(width: 8),
                 SizedBox(
-                  width: 70,
+                  width: 90,
                   child: TextField(
                     controller: _dimUnit,
                     decoration: const InputDecoration(
                       labelText: 'Unit',
-                      hintText: 'in',
+                      hintText: 'inch',
                     ),
                   ),
                 ),

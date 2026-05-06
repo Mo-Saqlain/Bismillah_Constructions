@@ -8,6 +8,7 @@ import '../../data/models/party.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
 import 'csv_export.dart';
 import 'pdf_generator.dart';
@@ -23,6 +24,8 @@ class SupplierLedgerScreen extends ConsumerStatefulWidget {
 
 class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
   String? _projectFilter;
+  DateTime? _from;
+  DateTime? _to;
   Party? _supplier;
   List<JournalEntry> _rows = const [];
   List<Project> _projects = const [];
@@ -37,17 +40,20 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
   Future<void> _load() async {
     final ent = await ref.read(entityRepoProvider.future);
     final ledger = await ref.read(ledgerRepoProvider.future);
-    final all = await ledger.entriesForSupplier(widget.supplierId,
-        projectId: _projectFilter);
+    final all = await ledger.entriesForSupplier(
+      widget.supplierId,
+      projectId: _projectFilter,
+      from: _from,
+      to: _to,
+    );
     _rows =
         all.where((r) => r.accountId == Accounts.supplierPayables.id).toList();
     _supplier = await ent.supplier(widget.supplierId);
     _projects = await ent.projects();
   }
 
-  void _setFilter(String? v) {
+  void _refilter() {
     setState(() {
-      _projectFilter = v;
       _future = _load();
     });
   }
@@ -68,6 +74,17 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
     }).toList();
   }
 
+  /// FBR-style party meta line (NTN/CNIC + category + tax status).
+  /// Empty string when nothing useful is on file.
+  String _partyMeta(Party s) {
+    final parts = <String>[
+      if (s.phone != null && s.phone!.isNotEmpty) 'Ph: ${s.phone}',
+      if (s.taxStatus != null && s.taxStatus!.isNotEmpty) 'NTN: ${s.taxStatus}',
+      if (s.category != null) s.category!.label,
+    ];
+    return parts.join(' · ');
+  }
+
   Future<void> _exportPdf() async {
     final s = _supplier;
     if (s == null) return;
@@ -75,6 +92,8 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
       supplierName: s.name,
       rows: _rows,
       generatedAt: DateTime.now(),
+      period: formatPeriod(_from, _to),
+      partyMeta: _partyMeta(s),
     ));
   }
 
@@ -83,16 +102,26 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
     if (s == null) return;
     final rows = _toRows(_rows);
     final csv = CsvExport.build(
-      headers: ['Date', 'Memo', 'Debit', 'Credit', 'Balance'],
-      rows: rows
-          .map((r) => [
-                fmtDate(r.date),
-                r.memo,
-                r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
-                r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
-                r.balance.toStringAsFixed(2),
-              ])
-          .toList(),
+      headers: const [
+        'Date',
+        'Particulars',
+        'Debit',
+        'Credit',
+        'Balance'
+      ],
+      rows: [
+        ['Supplier:', s.name, '', '', ''],
+        if (_partyMeta(s).isNotEmpty) ['Details:', _partyMeta(s), '', '', ''],
+        ['Period:', formatPeriod(_from, _to), '', '', ''],
+        ['', '', '', '', ''],
+        ...rows.map((r) => [
+              fmtDate(r.date),
+              r.memo,
+              r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
+              r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
+              r.balance.toStringAsFixed(2),
+            ]),
+      ],
     );
     await CsvExport.share(
       fileName:
@@ -133,27 +162,44 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
 
           return LedgerView(
             title: supplier.name,
-            subtitle: [
-              if (supplier.phone != null) supplier.phone,
-              if (supplier.category != null) supplier.category!.label,
-            ].whereType<String>().join(' · '),
+            subtitle: '${_partyMeta(supplier)}'
+                '${_partyMeta(supplier).isNotEmpty ? ' · ' : ''}'
+                'Period: ${formatPeriod(_from, _to)}',
             rows: ledgerRows,
             totalLabel: 'Net Outstanding',
             totalValue: total,
-            emptyMessage: 'No transactions with this supplier yet.',
-            headerBelowTitle: DropdownButtonFormField<String>(
-              initialValue: _projectFilter,
-              decoration: const InputDecoration(
-                labelText: 'Filter by Project (optional)',
-                isDense: true,
-              ),
-              items: [
-                const DropdownMenuItem(
-                    value: null, child: Text('All Projects')),
-                ..._projects.map((p) =>
-                    DropdownMenuItem(value: p.id, child: Text(p.name))),
+            emptyMessage: 'No transactions with this supplier in the period.',
+            headerBelowTitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DateRangeBar(
+                  from: _from,
+                  to: _to,
+                  onChanged: (f, t) {
+                    _from = f;
+                    _to = t;
+                    _refilter();
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _projectFilter,
+                  decoration: const InputDecoration(
+                    labelText: 'Filter by Project (optional)',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(
+                        value: null, child: Text('All Projects')),
+                    ..._projects.map((p) =>
+                        DropdownMenuItem(value: p.id, child: Text(p.name))),
+                  ],
+                  onChanged: (v) {
+                    _projectFilter = v;
+                    _refilter();
+                  },
+                ),
               ],
-              onChanged: _setFilter,
             ),
           );
         },
