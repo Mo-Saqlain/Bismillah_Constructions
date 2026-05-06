@@ -217,15 +217,20 @@ class AccountSummary {
   /// System cash (Cash account).
   final double cash;
 
-  /// Supervisor Float account.
-  final double supervisorFloat;
-
   /// Per user-defined bank balance, keyed by bank id. The bank's display name
   /// is on the corresponding [Bank] row.
   final Map<String, double> bankBalances;
 
   /// Outstanding supplier payables (credits − debits).
   final double payables;
+
+  /// Sum of money owed to us by customers (under-funded projects).
+  /// Computed via the same FIFO logic as the Aging Receivables report.
+  final double projectReceivables;
+
+  /// Sum of advances we are sitting on with our suppliers (we paid more
+  /// than we have been billed).
+  final double supplierOverpayments;
 
   final double materialCosts;
   final double labourCosts;
@@ -238,9 +243,10 @@ class AccountSummary {
 
   const AccountSummary({
     required this.cash,
-    required this.supervisorFloat,
     required this.bankBalances,
     required this.payables,
+    required this.projectReceivables,
+    required this.supplierOverpayments,
     required this.materialCosts,
     required this.labourCosts,
     required this.revenue,
@@ -250,11 +256,15 @@ class AccountSummary {
     required this.counterPayables,
   });
 
+  /// Total amount owed to us — what the home screen's "Receivables" tile
+  /// shows. Combines unpaid project work and supplier overpayments.
+  double get totalReceivables => projectReceivables + supplierOverpayments;
+
   double get totalBanks =>
       bankBalances.values.fold<double>(0, (a, b) => a + b);
 
-  /// Cash + Supervisor Float + every user-defined bank.
-  double get liquidCash => cash + supervisorFloat + totalBanks;
+  /// Cash + every user-defined bank/wallet.
+  double get liquidCash => cash + totalBanks;
 
   /// Spec section 6: Liquid_Cash − Total_Supplier_Payables.
   double get netLiquidity => liquidCash - payables;
@@ -280,7 +290,6 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
 
   final fixed = await Future.wait([
     dr(Accounts.cash.id),
-    dr(Accounts.supervisorFloat.id),
     cr(Accounts.supplierPayables.id),
     dr(Accounts.materialCosts.id),
     dr(Accounts.labourCosts.id),
@@ -301,16 +310,22 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
       .where((e) => e.type == CounterEntityType.payable)
       .fold<double>(0, (s, e) => s + e.amount);
 
+  // Receivables totals via the FIFO aging logic — same source the Aging
+  // Receivables screen uses, so the dashboard tile and the report always
+  // agree.
+  final receivables = await repo.receivablesTotals();
+
   return AccountSummary(
     cash: fixed[0],
-    supervisorFloat: fixed[1],
     bankBalances: bankBalances,
-    payables: fixed[2],
-    materialCosts: fixed[3],
-    labourCosts: fixed[4],
-    revenue: fixed[5],
-    serviceFeeIncome: fixed[6],
-    personalDraw: fixed[7],
+    payables: fixed[1],
+    projectReceivables: receivables.projectsOwed,
+    supplierOverpayments: receivables.suppliersOverpaid,
+    materialCosts: fixed[2],
+    labourCosts: fixed[3],
+    revenue: fixed[4],
+    serviceFeeIncome: fixed[5],
+    personalDraw: fixed[6],
     counterReceivables: counterRecv,
     counterPayables: counterPay,
   );

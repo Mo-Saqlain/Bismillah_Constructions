@@ -387,16 +387,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 24),
+          // The launcher icon is the only place the brand mark appears.
+          // The footer keeps just the wordmark so the screen still feels
+          // signed.
           Center(
-            child: Column(
-              children: [
-                Image.asset('assets/logo.png', height: 48),
-                const SizedBox(height: 4),
-                Text(
-                  'Bismillah',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
+            child: Text(
+              'Bismillah',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         ],

@@ -8,7 +8,6 @@ void main() {
     expect(ids.toSet().length, ids.length, reason: 'Account IDs are unique');
     expect(Accounts.byId(Accounts.cash.id), Accounts.cash);
     expect(Accounts.systemCashLike, contains(Accounts.cash));
-    expect(Accounts.systemCashLike, contains(Accounts.supervisorFloat));
   });
 
   test('Canonical transaction kinds all have label + blurb', () {

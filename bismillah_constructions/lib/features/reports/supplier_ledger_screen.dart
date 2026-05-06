@@ -127,7 +127,7 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
       fileName:
           'supplier_ledger_${s.name}_${DateTime.now().millisecondsSinceEpoch}',
       csv: csv,
-      subject: 'Supplier Ledger — ${s.name}',
+      subject: 'Material Supplier Ledger — ${s.name}',
     );
   }
 
@@ -137,7 +137,7 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Supplier Ledger'),
+        title: const Text('Material Supplier Ledger'),
         actions: [
           LedgerExportActions(
             enabled: _rows.isNotEmpty,
@@ -168,6 +168,9 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
             rows: ledgerRows,
             totalLabel: 'Net Outstanding',
             totalValue: total,
+            // Colourise the running balance: blue when positive (payable
+            // to supplier), red when negative (we overpaid them).
+            signedTotal: true,
             emptyMessage: 'No transactions with this supplier in the period.',
             headerBelowTitle: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -208,6 +211,10 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
   }
 }
 
+/// Picker for the Material Supplier Ledger — only material-category
+/// suppliers (and uncategorised legacy ones) are listed. Labour suppliers
+/// are reached via the Labour Supplier Ledger picker instead so the two
+/// reports stay disjoint.
 class SupplierLedgerPickerScreen extends ConsumerWidget {
   const SupplierLedgerPickerScreen({super.key});
 
@@ -215,19 +222,29 @@ class SupplierLedgerPickerScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final suppliers = ref.watch(suppliersProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Choose Supplier')),
+      appBar: AppBar(title: const Text('Material Supplier Ledger')),
       body: AsyncView<List<Party>>(
         value: suppliers,
         data: (list) {
-          if (list.isEmpty) {
-            return const Center(child: Text('Add a supplier first.'));
+          final materialSuppliers = list
+              .where((s) =>
+                  s.category == null ||
+                  s.category == SupplierCategory.material)
+              .toList();
+          if (materialSuppliers.isEmpty) {
+            return const Center(
+                child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                  'No material suppliers yet. Add one from Manage → Suppliers.'),
+            ));
           }
           return ListView.separated(
             padding: const EdgeInsets.all(12),
-            itemCount: list.length,
+            itemCount: materialSuppliers.length,
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (_, i) {
-              final s = list[i];
+              final s = materialSuppliers[i];
               return Card(
                 child: ListTile(
                   leading:

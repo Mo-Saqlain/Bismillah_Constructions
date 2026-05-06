@@ -57,7 +57,6 @@ class MaterialTypesScreen extends ConsumerWidget {
 
   Future<void> _delete(
       BuildContext context, WidgetRef ref, MaterialTypeDef row) async {
-    if (row.isBuiltin) return;
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showDialog<bool>(
       context: context,
@@ -119,10 +118,8 @@ class MaterialTypesScreen extends ConsumerWidget {
               return Card(
                 child: ListTile(
                   isThreeLine: r.uomType != null || r.uom != null,
-                  leading: CircleAvatar(
-                    child: Icon(r.isBuiltin
-                        ? Icons.lock_outline
-                        : Icons.category_outlined),
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.category_outlined),
                   ),
                   title: Text(r.name,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -136,13 +133,9 @@ class MaterialTypesScreen extends ConsumerWidget {
                         onPressed: () => _addOrEdit(context, ref, r),
                       ),
                       IconButton(
-                        tooltip: r.isBuiltin
-                            ? 'Built-ins cannot be deleted'
-                            : 'Delete',
+                        tooltip: 'Delete',
                         icon: const Icon(Icons.delete_outline),
-                        onPressed: r.isBuiltin
-                            ? null
-                            : () => _delete(context, ref, r),
+                        onPressed: () => _delete(context, ref, r),
                       ),
                     ],
                   ),
@@ -171,11 +164,11 @@ class _SubtitleSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parts = <String>[
-      row.isBuiltin ? 'Built-in' : 'Custom',
       if (row.uomType != null) row.uomType!.label,
       if (row.uom != null && row.uom!.isNotEmpty) row.uom!,
       if (row.coverageRate != null) 'coverage ${row.coverageRate}',
     ];
+    if (parts.isEmpty) return const Text('No measurement details');
     return Text(parts.join(' · '),
         maxLines: 2, overflow: TextOverflow.ellipsis);
   }

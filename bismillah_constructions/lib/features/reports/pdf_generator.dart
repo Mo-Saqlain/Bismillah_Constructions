@@ -13,19 +13,22 @@ class IncomeStatementData {
   final double materialCosts;
   final double labourCosts;
   final DateTime generatedAt;
+  /// Human-readable period label ("All dates", "1 Jan 2025 → 31 Mar 2025").
+  /// Surfaced under the title on the PDF.
+  final String period;
   IncomeStatementData({
     this.projectName,
     required this.revenue,
     required this.materialCosts,
     required this.labourCosts,
     required this.generatedAt,
+    this.period = 'All dates',
   });
   double get net => revenue - (materialCosts + labourCosts);
 }
 
 class BalanceSheetData {
   final double cash;
-  final double supervisorFloat;
   /// (name, balance) pairs for each user-defined bank/wallet.
   final List<(String, double)> bankRows;
   final double counterReceivables;
@@ -35,7 +38,6 @@ class BalanceSheetData {
   final DateTime generatedAt;
   BalanceSheetData({
     required this.cash,
-    required this.supervisorFloat,
     required this.bankRows,
     required this.counterReceivables,
     required this.payables,
@@ -45,8 +47,7 @@ class BalanceSheetData {
   });
   double get totalBanks =>
       bankRows.fold<double>(0, (a, r) => a + r.$2);
-  double get assets =>
-      cash + supervisorFloat + totalBanks + counterReceivables;
+  double get assets => cash + totalBanks + counterReceivables;
   double get liabPlusEquity => payables + counterPayables + equity;
   bool get balanced => (assets - liabPlusEquity).abs() < 0.01;
 }
@@ -128,7 +129,7 @@ class PdfGenerator {
   static Future<void> previewSupplierLedger(SupplierLedgerData d) async {
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat f) => _buildSupplierLedger(d),
-      name: 'Supplier Ledger — ${d.supplierName}',
+      name: 'Material Supplier Ledger — ${d.supplierName}',
     );
   }
 
@@ -192,7 +193,8 @@ class PdfGenerator {
           _header(
               'Income Statement',
               'Project: ${d.projectName ?? "All Projects"}  ·  '
-                  'As of ${fmtDateTime(d.generatedAt)}'),
+                  'Period: ${d.period}  ·  '
+                  'Generated ${fmtDateTime(d.generatedAt)}'),
           pw.SizedBox(height: 12),
           _line('Project Revenue', d.revenue, bold: true),
           pw.SizedBox(height: 8),
@@ -223,7 +225,6 @@ class PdfGenerator {
               style: pw.TextStyle(
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
           _line('  Cash', d.cash),
-          _line('  Supervisor Float', d.supervisorFloat),
           for (final r in d.bankRows) _line('  ${r.$1}', r.$2),
           if (d.counterReceivables > 0)
             _line('  Counter Receivables', d.counterReceivables),
@@ -373,7 +374,7 @@ class PdfGenerator {
 
     doc.addPage(pw.MultiPage(
       build: (ctx) => [
-        _header('Supplier Ledger', subtitle.toString()),
+        _header('Material Supplier Ledger', subtitle.toString()),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
           headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),

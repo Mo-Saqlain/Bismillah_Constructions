@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 8);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 9);
 
   Database? _db;
   String? _dbPath;
@@ -41,7 +41,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 8,
+        version: 9,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -176,8 +176,13 @@ class LocalDb {
     ''');
 
     // v7 base columns + v8 procurement metadata. uom_typ is one of
-    // 'disc' / 'surf' / 'vol' / 'wgt'; cov_rate / dims are only meaningful
-    // for some uom_typ values, so they're nullable.
+    // 'discrete' / 'surface' / 'volume' / 'weight'; cov_rate / dims are
+    // only meaningful for some uom_typ values, so they're nullable.
+    //
+    // is_builtin used to lock the original five seeded rows from deletion.
+    // v9 removed seeding entirely (the user wants to define every material
+    // type themselves), so the column is left for backwards-compat with
+    // upgraded installs but is no longer enforced anywhere.
     await db.execute('''
       CREATE TABLE material_types (
         id TEXT PRIMARY KEY,
@@ -193,7 +198,8 @@ class LocalDb {
         created_at TEXT NOT NULL
       )
     ''');
-    await _seedMaterialTypes(db);
+    // No seeds. Fresh installs start with an empty material catalog so the
+    // user can define every type from scratch.
 
     await db.execute(
       'CREATE INDEX idx_je_txn ON journal_entries(transaction_id)',
@@ -325,9 +331,9 @@ class LocalDb {
     }
 
     if (oldVersion < 7) {
-      // v7: user-defined material types. The five legacy enum values are
-      // seeded as built-ins so existing material_inventory rows keep their
-      // labels and the dropdown isn't empty for upgraded installs.
+      // v7: user-defined material types table. Originally the five legacy
+      // enum values were seeded as built-ins; v9 removed that — so we
+      // create the table empty and let the user define their own rows.
       await db.execute('''
         CREATE TABLE IF NOT EXISTS material_types (
           id TEXT PRIMARY KEY,
@@ -337,7 +343,6 @@ class LocalDb {
           created_at TEXT NOT NULL
         )
       ''');
-      await _seedMaterialTypes(db);
     }
 
     if (oldVersion < 8) {
@@ -355,6 +360,14 @@ class LocalDb {
           await db.execute(ddl);
         } catch (_) {/* may already exist on partial upgrades */}
       }
+    }
+
+    if (oldVersion < 9) {
+      // v9: drop the seeded built-in material types — the user wants to
+      // define every category themselves. Historical material_inventory
+      // rows still display correctly because they store the type name as
+      // a free-form string, not a foreign key.
+      await db.delete('material_types', where: 'is_builtin = 1');
     }
 
     if (oldVersion < 3) {
@@ -396,31 +409,4 @@ class LocalDb {
     }
   }
 
-  /// Seeds the five legacy [MaterialType] enum values as built-in rows so
-  /// fresh installs have a working dropdown out of the box. Uses INSERT OR
-  /// IGNORE on the unique `name` so re-running the seed (e.g. after a
-  /// downgrade/upgrade) is a no-op.
-  Future<void> _seedMaterialTypes(Database db) async {
-    const seeds = <Map<String, Object>>[
-      {'id': 'mt_brick', 'name': 'Brick', 'sort_order': 0},
-      {'id': 'mt_cement', 'name': 'Cement', 'sort_order': 1},
-      {'id': 'mt_sarya', 'name': 'Sarya (Steel)', 'sort_order': 2},
-      {'id': 'mt_finishing', 'name': 'Finishing', 'sort_order': 3},
-      {'id': 'mt_other', 'name': 'Other', 'sort_order': 4},
-    ];
-    final now = DateTime.now().toUtc().toIso8601String();
-    for (final s in seeds) {
-      await db.insert(
-        'material_types',
-        {
-          'id': s['id'],
-          'name': s['name'],
-          'is_builtin': 1,
-          'sort_order': s['sort_order'],
-          'created_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-    }
-  }
 }

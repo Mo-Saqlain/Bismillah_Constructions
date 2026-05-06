@@ -657,6 +657,7 @@ class LedgerRepository {
     );
 
     double opIn = 0, opOut = 0, finOut = 0, other = 0;
+    double transferIn = 0, transferOut = 0;
 
     for (final row in cashRows) {
       final txnId = row['transaction_id'] as String;
@@ -672,8 +673,14 @@ class LedgerRepository {
         [txnId, ...cashIds],
       );
       if (sibling.isEmpty) {
-        // Wallet transfer — both sides are cash-like; skip so we don't
-        // double-count the same money.
+        // Wallet transfer — both legs are cash-like. The consolidated
+        // cash position doesn't change, but we surface the gross volume
+        // under Financing so the user can see the activity.
+        if (delta > 0) {
+          transferIn += delta;
+        } else {
+          transferOut += -delta;
+        }
         continue;
       }
       final otherAccount = sibling.first['account_id'] as String;
@@ -707,17 +714,29 @@ class LedgerRepository {
       operatingInflow: opIn,
       operatingOutflow: opOut,
       financingOutflow: finOut,
+      transferIn: transferIn,
+      transferOut: transferOut,
       otherNet: other,
     );
   }
 
-  /// Sum(debit) - sum(credit). Always excludes soft-deleted rows.
-  Future<double> accountBalance(String accountId, {String? projectId}) async {
+  /// Sum(debit) - sum(credit). Always excludes soft-deleted rows. Optional
+  /// [from]/[to] window applies inclusively to `created_at`.
+  Future<double> accountBalance(String accountId,
+      {String? projectId, DateTime? from, DateTime? to}) async {
     final where = StringBuffer('account_id = ? AND is_deleted = 0');
     final args = <Object>[accountId];
     if (projectId != null) {
       where.write(' AND project_id = ?');
       args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT COALESCE(SUM(debit),0) - COALESCE(SUM(credit),0) AS bal '
@@ -727,18 +746,30 @@ class LedgerRepository {
     return ((rows.first['bal'] as num?) ?? 0).toDouble();
   }
 
-  Future<double> creditBalance(String accountId, {String? projectId}) async {
-    final bal = await accountBalance(accountId, projectId: projectId);
+  Future<double> creditBalance(String accountId,
+      {String? projectId, DateTime? from, DateTime? to}) async {
+    final bal = await accountBalance(accountId,
+        projectId: projectId, from: from, to: to);
     return -bal;
   }
 
-  /// Sum of debits to a specific account, optionally filtered by project.
-  Future<double> sumDebits(String accountId, {String? projectId}) async {
+  /// Sum of debits to a specific account, optionally filtered by project
+  /// and/or date window.
+  Future<double> sumDebits(String accountId,
+      {String? projectId, DateTime? from, DateTime? to}) async {
     final where = StringBuffer('account_id = ? AND is_deleted = 0');
     final args = <Object>[accountId];
     if (projectId != null) {
       where.write(' AND project_id = ?');
       args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT COALESCE(SUM(debit),0) AS s FROM journal_entries WHERE ${where.toString()}',
@@ -747,12 +778,21 @@ class LedgerRepository {
     return ((rows.first['s'] as num?) ?? 0).toDouble();
   }
 
-  Future<double> sumCredits(String accountId, {String? projectId}) async {
+  Future<double> sumCredits(String accountId,
+      {String? projectId, DateTime? from, DateTime? to}) async {
     final where = StringBuffer('account_id = ? AND is_deleted = 0');
     final args = <Object>[accountId];
     if (projectId != null) {
       where.write(' AND project_id = ?');
       args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT COALESCE(SUM(credit),0) AS s FROM journal_entries WHERE ${where.toString()}',
@@ -792,6 +832,54 @@ class LedgerRepository {
     final lab = await sumDebits(Accounts.labourCosts.id, projectId: projectId);
     return mat + lab;
   }
+
+  /// Closing snapshot for a Labour-Rate project.
+  ///
+  /// In the labour-rate model the contractor is a pass-through:
+  ///   * `customerPaid`  — total `Project Revenue` credits (cash from
+  ///     customer over the life of the project).
+  ///   * `totalSpent`    — total Material + Labour cost debits (what we
+  ///     spent on the customer's behalf).
+  ///   * `serviceFee`    — `totalSpent × feePercent / 100`, the contractor's
+  ///     earnings on this job.
+  ///   * `netToSettle`   — `(customerPaid − serviceFee) − totalSpent`.
+  ///       positive → refund customer the surplus
+  ///       negative → customer owes us the deficit (already includes fee)
+  Future<LabourRateClose> labourRateCloseSummary(
+      String projectId, double feePercent) async {
+    final customerPaid =
+        await sumCredits(Accounts.projectRevenue.id, projectId: projectId);
+    final totalSpent = await projectOutflow(projectId);
+    final serviceFee = totalSpent * feePercent / 100;
+    final customerFundsAvail = customerPaid - serviceFee;
+    final netToSettle = customerFundsAvail - totalSpent;
+    return LabourRateClose(
+      customerPaid: customerPaid,
+      totalSpent: totalSpent,
+      feePercent: feePercent,
+      serviceFee: serviceFee,
+      netToSettle: netToSettle,
+    );
+  }
+
+  /// Posts the labour-rate service fee at project close as a non-cash
+  /// reclassification: Dr Project Revenue / Cr Service Fee Income, both
+  /// tagged with `projectId`. Cash position is unaffected — the fee just
+  /// re-buckets a slice of recognized customer revenue into the
+  /// contractor's own income line so the Income Statement separates
+  /// "money handled for the customer" from "earnings".
+  Future<String> postProjectServiceFee({
+    required String projectId,
+    required double amount,
+    String? description,
+  }) =>
+      _post(
+        debitAccount: Accounts.projectRevenue,
+        creditAccount: Accounts.serviceFeeIncome,
+        amount: amount,
+        projectId: projectId,
+        description: description ?? 'Service fee on project close',
+      );
 
   // -------------------- Aging Analysis --------------------
 
@@ -874,6 +962,175 @@ class LedgerRepository {
     });
     lines.sort((a, b) => b.total.compareTo(a.total));
     return AgingReport(asOf: now, lines: lines);
+  }
+
+  /// Aging — projects that have not paid us yet. For each project we walk
+  /// the journal in chronological order:
+  ///   * Material/Labour Costs debits (project_id) = "we spent on the
+  ///     customer's behalf" → contributes to the open balance owed.
+  ///   * Project Revenue credits (project_id) = "customer paid" → consumes
+  ///     the open balance FIFO.
+  /// Whatever is left after the FIFO match is bucketed by age. Mirrors
+  /// `aging()` so the screen can render with the same widgets.
+  Future<AgingReport> agingProjectReceivables({DateTime? asOf}) async {
+    final now = (asOf ?? DateTime.now()).toUtc();
+    // Pull every cost & revenue row tagged with a project, in time order.
+    final rows = await _db.rawQuery(
+      'SELECT project_id, account_id, debit, credit, created_at '
+      'FROM journal_entries '
+      'WHERE is_deleted = 0 AND project_id IS NOT NULL '
+      'AND account_id IN (?, ?, ?) '
+      'ORDER BY created_at ASC',
+      [
+        Accounts.materialCosts.id,
+        Accounts.labourCosts.id,
+        Accounts.projectRevenue.id,
+      ],
+    );
+
+    final byProject = <String, List<_OpenInvoice>>{};
+    for (final r in rows) {
+      final projectId = r['project_id'] as String;
+      final accountId = r['account_id'] as String;
+      final debit = (r['debit'] as num).toDouble();
+      final credit = (r['credit'] as num).toDouble();
+      final created = DateTime.parse(r['created_at'] as String);
+
+      final queue = byProject.putIfAbsent(projectId, () => []);
+      if (accountId == Accounts.materialCosts.id ||
+          accountId == Accounts.labourCosts.id) {
+        // Cost incurred → customer owes us this much.
+        if (debit > 0) {
+          queue.add(_OpenInvoice(date: created, remaining: debit));
+        }
+      } else if (accountId == Accounts.projectRevenue.id) {
+        // Customer paid → consume open balance FIFO.
+        var pay = credit;
+        while (pay > 0 && queue.isNotEmpty) {
+          final head = queue.first;
+          if (head.remaining <= pay) {
+            pay -= head.remaining;
+            queue.removeAt(0);
+          } else {
+            head.remaining -= pay;
+            pay = 0;
+          }
+        }
+      }
+    }
+
+    final lines = <AgingLine>[];
+    byProject.forEach((projectId, queue) {
+      var b0 = 0.0, b30 = 0.0, b60 = 0.0, b90 = 0.0;
+      for (final inv in queue) {
+        final days = now.difference(inv.date).inDays;
+        if (days <= 30) {
+          b0 += inv.remaining;
+        } else if (days <= 60) {
+          b30 += inv.remaining;
+        } else if (days <= 90) {
+          b60 += inv.remaining;
+        } else {
+          b90 += inv.remaining;
+        }
+      }
+      final total = b0 + b30 + b60 + b90;
+      if (total > 0.005) {
+        lines.add(AgingLine(
+          partyId: projectId,
+          bucket0_30: b0,
+          bucket31_60: b30,
+          bucket61_90: b60,
+          bucket90Plus: b90,
+        ));
+      }
+    });
+    lines.sort((a, b) => b.total.compareTo(a.total));
+    return AgingReport(asOf: now, lines: lines);
+  }
+
+  /// Aging — suppliers we have OVERPAID (negative payable). For each
+  /// supplier:
+  ///   * Supplier Payables debits = payments to the supplier (advance) →
+  ///     contributes to "they owe us".
+  ///   * Supplier Payables credits = bills incurred → consume the advance
+  ///     FIFO.
+  /// What's left is the unmatched advance, bucketed by age. The standard
+  /// payables aging already covers the opposite direction.
+  Future<AgingReport> agingSupplierOverpayment({DateTime? asOf}) async {
+    final now = (asOf ?? DateTime.now()).toUtc();
+    final rows = await _db.query(
+      'journal_entries',
+      where: 'account_id = ? AND is_deleted = 0',
+      whereArgs: [Accounts.supplierPayables.id],
+      orderBy: 'created_at ASC',
+    );
+
+    final bySupplier = <String, List<_OpenInvoice>>{};
+    for (final row in rows) {
+      final je = JournalEntry.fromMap(row);
+      final supplierId = je.supplierId;
+      if (supplierId == null) continue;
+      final queue = bySupplier.putIfAbsent(supplierId, () => []);
+      if (je.debit > 0) {
+        // Payment to supplier — they hold our money.
+        queue.add(_OpenInvoice(date: je.createdAt, remaining: je.debit));
+      } else if (je.credit > 0) {
+        var pay = je.credit;
+        while (pay > 0 && queue.isNotEmpty) {
+          final head = queue.first;
+          if (head.remaining <= pay) {
+            pay -= head.remaining;
+            queue.removeAt(0);
+          } else {
+            head.remaining -= pay;
+            pay = 0;
+          }
+        }
+      }
+    }
+
+    final lines = <AgingLine>[];
+    bySupplier.forEach((supplierId, queue) {
+      var b0 = 0.0, b30 = 0.0, b60 = 0.0, b90 = 0.0;
+      for (final inv in queue) {
+        final days = now.difference(inv.date).inDays;
+        if (days <= 30) {
+          b0 += inv.remaining;
+        } else if (days <= 60) {
+          b30 += inv.remaining;
+        } else if (days <= 90) {
+          b60 += inv.remaining;
+        } else {
+          b90 += inv.remaining;
+        }
+      }
+      final total = b0 + b30 + b60 + b90;
+      if (total > 0.005) {
+        lines.add(AgingLine(
+          partyId: supplierId,
+          bucket0_30: b0,
+          bucket31_60: b30,
+          bucket61_90: b60,
+          bucket90Plus: b90,
+        ));
+      }
+    });
+    lines.sort((a, b) => b.total.compareTo(a.total));
+    return AgingReport(asOf: now, lines: lines);
+  }
+
+  /// Sum of grand totals across project-side and supplier-side
+  /// receivables — exposed for the dashboard tile so it doesn't have to
+  /// re-run the FIFO calc just to show one number.
+  Future<({double projectsOwed, double suppliersOverpaid})>
+      receivablesTotals() async {
+    final p = await agingProjectReceivables();
+    final s = await agingSupplierOverpayment();
+    return (
+      projectsOwed: p.grandTotal,
+      suppliersOverpaid: s.grandTotal,
+    );
   }
 
   // -------------------- Cash Flow --------------------
@@ -1075,6 +1332,12 @@ class CashFlowSummary {
   final double operatingInflow;
   final double operatingOutflow;
   final double financingOutflow;
+  /// Gross movement on wallet transfers (always equal to each other since
+  /// every transfer has a matching destination credit). Surfaced under
+  /// Financing for visibility — they net to zero so they don't move the
+  /// closing cash number.
+  final double transferIn;
+  final double transferOut;
   /// Catch-all for cash legs whose sibling didn't land in any of the
   /// canonical buckets — e.g. legacy data, manual journal corrections.
   final double otherNet;
@@ -1084,6 +1347,8 @@ class CashFlowSummary {
     required this.operatingInflow,
     required this.operatingOutflow,
     required this.financingOutflow,
+    this.transferIn = 0,
+    this.transferOut = 0,
     required this.otherNet,
   });
 
@@ -1096,7 +1361,12 @@ class CashFlowSummary {
   );
 
   double get netOperating => operatingInflow - operatingOutflow;
-  double get netFinancing => -financingOutflow;
+  /// Net financing change. Wallet transfers contribute zero (transferIn
+  /// always equals transferOut), so the math reduces to `-financingOutflow`,
+  /// but writing it out keeps the formula honest if either side ever
+  /// diverges (e.g. a deleted leg).
+  double get netFinancing =>
+      -financingOutflow + transferIn - transferOut;
   double get netChange => netOperating + netFinancing + otherNet;
   double get closingCash => openingCash + netChange;
 }
@@ -1180,6 +1450,35 @@ class AgingReport {
       lines.fold(0, (s, l) => s + l.bucket90Plus);
   double get grandTotal =>
       total0_30 + total31_60 + total61_90 + total90Plus;
+}
+
+/// Settlement snapshot returned by [LedgerRepository.labourRateCloseSummary].
+///
+/// Sign convention on [netToSettle]:
+///   * Positive → contractor is holding the customer's surplus → refund it.
+///   * Negative → spending overran customer's deposits → customer owes us
+///     this amount (deficit + service fee, packed into one number).
+class LabourRateClose {
+  final double customerPaid;
+  final double totalSpent;
+  final double feePercent;
+  final double serviceFee;
+  final double netToSettle;
+
+  const LabourRateClose({
+    required this.customerPaid,
+    required this.totalSpent,
+    required this.feePercent,
+    required this.serviceFee,
+    required this.netToSettle,
+  });
+
+  /// Amount the contractor has to refund (0 when the customer underpaid).
+  double get refundToCustomer => netToSettle > 0 ? netToSettle : 0;
+
+  /// Amount the customer still owes (0 when overpaid). Already includes
+  /// the service fee in the deficit case.
+  double get customerOwesUs => netToSettle < 0 ? -netToSettle : 0;
 }
 
 class ProjectReconciliation {

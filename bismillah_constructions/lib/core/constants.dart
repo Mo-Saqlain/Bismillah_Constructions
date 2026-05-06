@@ -13,11 +13,13 @@ class Account {
 /// System (built-in) accounts. Banks / wallets defined by the user are loaded
 /// at runtime from the `banks` table and joined onto these for the cash-like
 /// list — see [cashLikeAccountsProvider].
+///
+/// "Supervisor Float" used to live here as a system wallet; it was removed
+/// per user request — every cash-like account is now user-defined via the
+/// banks table. The Cash account stays as a single fallback wallet.
 class Accounts {
   // Assets — system
   static const cash = Account('CASH', 'Cash', AccountType.asset);
-  static const supervisorFloat =
-      Account('SUPERVISOR_FLOAT', 'Supervisor Float', AccountType.asset);
   static const externalWallet =
       Account('EXTERNAL_WALLET', 'External Wallet', AccountType.asset);
 
@@ -43,10 +45,11 @@ class Accounts {
   static const ownersEquity =
       Account('OWNERS_EQUITY', "Owner's Equity", AccountType.equity);
 
-  /// All built-in accounts (does not include user-defined banks).
+  /// All built-in accounts (does not include user-defined banks). Legacy
+  /// `Supervisor Float` rows in old databases still resolve to a usable
+  /// label via [byId]'s fallback.
   static const all = <Account>[
     cash,
-    supervisorFloat,
     externalWallet,
     supplierPayables,
     projectRevenue,
@@ -57,13 +60,21 @@ class Accounts {
     ownersEquity,
   ];
 
-  static Account byId(String id) =>
-      all.firstWhere((a) => a.id == id,
-          orElse: () => Account(id, id, AccountType.asset));
+  static Account byId(String id) {
+    // Legacy rows from before Supervisor Float was removed still reference
+    // its account id — surface a friendly label so historical ledgers stay
+    // readable even though the account is no longer in [all].
+    if (id == 'SUPERVISOR_FLOAT') {
+      return const Account('SUPERVISOR_FLOAT', 'Supervisor Float (legacy)',
+          AccountType.asset);
+    }
+    return all.firstWhere((a) => a.id == id,
+        orElse: () => Account(id, id, AccountType.asset));
+  }
 
-  /// System cash-like wallets ALWAYS available (Cash + Supervisor Float).
-  /// User-defined banks are appended at runtime via `cashLikeAccountsProvider`.
-  static const systemCashLike = <Account>[cash, supervisorFloat];
+  /// System cash-like wallet ALWAYS available (just Cash). User-defined
+  /// banks are appended at runtime via `cashLikeAccountsProvider`.
+  static const systemCashLike = <Account>[cash];
 }
 
 enum ProjectModel { withMaterial, labourRate }

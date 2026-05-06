@@ -100,7 +100,9 @@ class _TransactionFormScreenState
       final ledger = await ref.read(ledgerRepoProvider.future);
       final desc =
           _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim();
-      final amount = double.parse(_amountCtrl.text);
+      // Strip the live thousands separators before parsing — the formatter
+      // injects commas for readability while the user types.
+      final amount = double.parse(_amountCtrl.text.replaceAll(',', ''));
 
       String txnId;
       switch (_k) {
@@ -244,7 +246,8 @@ class _TransactionFormScreenState
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  _ThousandsSeparatorFormatter(),
                 ],
                 style: const TextStyle(
                     fontSize: 28, fontWeight: FontWeight.w600),
@@ -257,7 +260,7 @@ class _TransactionFormScreenState
                 ),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Enter an amount';
-                  final n = double.tryParse(v);
+                  final n = double.tryParse(v.replaceAll(',', ''));
                   if (n == null || n <= 0) return 'Must be a positive number';
                   return null;
                 },
@@ -608,6 +611,84 @@ class _MaterialTypePicker extends ConsumerWidget {
         );
       },
     );
+  }
+}
+
+/// Live thousands-separator formatter for the amount input.
+///
+/// Reformats the visible text on every keystroke so the user sees
+/// `1,234,567.89` while typing instead of a wall of digits. The decimal
+/// portion (anything after the first `.`) is left untouched — only the
+/// integer part gets grouped. Cursor position is preserved by counting
+/// how many digits sit to the left of it before and after the rewrite.
+///
+/// We only need to recognise commas / dots as input characters because
+/// the upstream `FilteringTextInputFormatter` already restricts the field
+/// to `[0-9.,]`.
+class _ThousandsSeparatorFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final raw = newValue.text;
+    if (raw.isEmpty) return newValue;
+
+    // Count digits to the left of the cursor in the raw input — used to
+    // re-position the cursor in the formatted output without snapping it
+    // to the end of the field.
+    final cursor = newValue.selection.baseOffset.clamp(0, raw.length);
+    var digitsBeforeCursor = 0;
+    for (var i = 0; i < cursor; i++) {
+      final ch = raw[i];
+      if (ch != ',' && ch != '.') digitsBeforeCursor++;
+    }
+
+    // Only one decimal point allowed; everything after the first `.` is
+    // the fractional part and is kept verbatim (no grouping).
+    final stripped = raw.replaceAll(',', '');
+    final dotIdx = stripped.indexOf('.');
+    final intPart = dotIdx == -1 ? stripped : stripped.substring(0, dotIdx);
+    final fracPart = dotIdx == -1 ? '' : stripped.substring(dotIdx);
+
+    final grouped = _groupThousands(intPart);
+    final formatted = '$grouped$fracPart';
+
+    // Walk the formatted string left-to-right and stop once we've passed
+    // the same number of digits we counted in the source — that's where
+    // the cursor belongs.
+    var newCursor = formatted.length;
+    var seen = 0;
+    for (var i = 0; i < formatted.length; i++) {
+      final ch = formatted[i];
+      if (ch != ',' && ch != '.') seen++;
+      if (seen == digitsBeforeCursor && dotIdx == -1
+          ? seen == digitsBeforeCursor
+          : false) {
+        // unreached — explicit branch just below
+      }
+      if (seen >= digitsBeforeCursor) {
+        newCursor = i + 1;
+        break;
+      }
+    }
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+  }
+
+  /// Inserts a comma every 3 digits from the right. Empty input returns
+  /// empty so the field can be cleared without showing a stray comma.
+  static String _groupThousands(String digits) {
+    if (digits.isEmpty) return '';
+    final buf = StringBuffer();
+    final n = digits.length;
+    for (var i = 0; i < n; i++) {
+      final fromRight = n - i;
+      buf.write(digits[i]);
+      if (fromRight > 1 && fromRight % 3 == 1) buf.write(',');
+    }
+    return buf.toString();
   }
 }
 

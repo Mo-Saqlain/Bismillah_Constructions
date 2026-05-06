@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'aging_analysis_screen.dart';
+import 'aging_receivables_screen.dart';
 import 'balance_sheet_screen.dart';
 import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
@@ -49,7 +50,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.engineering,
-            title: 'Wage Ledger',
+            title: 'Labour Supplier Ledger',
             subtitle:
                 'Per-worker statement of every wage charged (paid + on credit), date-filterable',
             onTap: () => Navigator.push(
@@ -69,9 +70,9 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.receipt_long,
-            title: 'Supplier Ledger',
+            title: 'Material Supplier Ledger',
             subtitle:
-                'Statement of account for a supplier (across or within a project)',
+                'Statement of account for a material supplier (across or within a project)',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -105,6 +106,16 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AgingAnalysisScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.hourglass_top,
+            title: 'Aging — Receivables',
+            subtitle:
+                'Money owed to you — projects under-funded by customers, suppliers we\'ve overpaid',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const AgingReceivablesScreen())),
           ),
         ],
       ),

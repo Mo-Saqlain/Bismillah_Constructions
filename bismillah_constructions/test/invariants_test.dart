@@ -132,8 +132,7 @@ void main() {
     await _ledgerRepo.postMaterialBuy(
         amount: 2000, projectId: pId, supplierId: sId);
 
-    final liquid = await _ledgerRepo.accountBalance(Accounts.cash.id) +
-        await _ledgerRepo.accountBalance(Accounts.supervisorFloat.id);
+    final liquid = await _ledgerRepo.accountBalance(Accounts.cash.id);
     final payables =
         await _ledgerRepo.creditBalance(Accounts.supplierPayables.id);
 

@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/date_range_bar.dart';
 import 'csv_export.dart';
 import 'pdf_generator.dart';
 
@@ -20,22 +21,25 @@ class IncomeStatementScreen extends ConsumerStatefulWidget {
 class _IncomeStatementScreenState
     extends ConsumerState<IncomeStatementScreen> {
   String? _projectId; // null = all projects
+  DateTime? _from;
+  DateTime? _to;
 
   Future<({double rev, double mat, double lab})> _figures(WidgetRef ref) async {
     final repo = await ref.read(ledgerRepoProvider.future);
-    final rev =
-        await repo.creditBalance(Accounts.projectRevenue.id, projectId: _projectId);
-    final mat =
-        await repo.accountBalance(Accounts.materialCosts.id, projectId: _projectId);
-    final lab =
-        await repo.accountBalance(Accounts.labourCosts.id, projectId: _projectId);
+    final rev = await repo.creditBalance(Accounts.projectRevenue.id,
+        projectId: _projectId, from: _from, to: _to);
+    final mat = await repo.accountBalance(Accounts.materialCosts.id,
+        projectId: _projectId, from: _from, to: _to);
+    final lab = await repo.accountBalance(Accounts.labourCosts.id,
+        projectId: _projectId, from: _from, to: _to);
     return (rev: rev, mat: mat, lab: lab);
   }
 
   @override
   Widget build(BuildContext context) {
     final projects = ref.watch(projectsProvider);
-    // re-trigger figures whenever ledger version or project filter changes
+    // re-trigger figures whenever ledger version, project filter or
+    // date window changes.
     final version = ref.watch(ledgerVersionProvider);
     final figuresFuture = _figures(ref);
 
@@ -44,6 +48,15 @@ class _IncomeStatementScreenState
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          DateRangeBar(
+            from: _from,
+            to: _to,
+            onChanged: (f, t) => setState(() {
+              _from = f;
+              _to = t;
+            }),
+          ),
+          const SizedBox(height: 12),
           AsyncView<List<Project>>(
             value: projects,
             data: (list) => DropdownButtonFormField<String?>(
@@ -60,7 +73,8 @@ class _IncomeStatementScreenState
           ),
           const SizedBox(height: 16),
           FutureBuilder<({double rev, double mat, double lab})>(
-            key: ValueKey('$_projectId-$version'),
+            key: ValueKey(
+                '$_projectId-$version-${_from?.toIso8601String()}-${_to?.toIso8601String()}'),
             future: figuresFuture,
             builder: (ctx, snap) {
               if (!snap.hasData) {
@@ -74,6 +88,11 @@ class _IncomeStatementScreenState
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text('Period: ${formatPeriod(_from, _to)}',
+                        style: Theme.of(ctx).textTheme.bodySmall),
+                  ),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -116,6 +135,7 @@ class _IncomeStatementScreenState
                               materialCosts: f.mat,
                               labourCosts: f.lab,
                               generatedAt: DateTime.now(),
+                              period: formatPeriod(_from, _to),
                             ),
                           );
                         },
@@ -136,13 +156,18 @@ class _IncomeStatementScreenState
                                     name;
                           }
                           final csv = CsvExport.build(
-                            headers: ['Line', 'Amount'],
+                            headers: const ['Particulars', 'Amount'],
                             rows: [
+                              ['Project:', name],
+                              ['Period:', formatPeriod(_from, _to)],
+                              ['', ''],
                               ['Revenue', f.rev.toStringAsFixed(2)],
                               ['Material Costs', (-f.mat).toStringAsFixed(2)],
                               ['Labour Costs', (-f.lab).toStringAsFixed(2)],
-                              ['Total Costs',
-                                  (-(f.mat + f.lab)).toStringAsFixed(2)],
+                              [
+                                'Total Costs',
+                                (-(f.mat + f.lab)).toStringAsFixed(2)
+                              ],
                               ['Net Profit / (Loss)', net.toStringAsFixed(2)],
                             ],
                           );

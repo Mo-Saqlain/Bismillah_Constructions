@@ -23,10 +23,12 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        leading: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Image.asset('assets/logo.png', fit: BoxFit.contain),
-        ),
+        // Logo intentionally lives only on the launcher icon now — no
+        // leading widget here. `automaticallyImplyLeading: false` keeps
+        // Flutter from inserting a placeholder back-arrow on the root
+        // tab, so the title sits flush against the standard 16-px
+        // padding instead of being nudged off-centre.
+        automaticallyImplyLeading: false,
         title: const Text('Bismillah'),
         actions: [
           _SyncIndicator(status: sync),
@@ -68,7 +70,6 @@ class DashboardScreen extends ConsumerWidget {
                     value: banks,
                     data: (banksList) => _WalletGrid(
                       cash: s.cash,
-                      supervisorFloat: s.supervisorFloat,
                       banks: banksList,
                       bankBalances: s.bankBalances,
                     ),
@@ -83,6 +84,17 @@ class DashboardScreen extends ConsumerWidget {
                             positive: false),
                       ),
                       const SizedBox(width: 8),
+                      Expanded(
+                        child: _StatTile(
+                            label: 'Receivables',
+                            value: s.totalReceivables,
+                            positive: true),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
                       Expanded(
                         child: _StatTile(
                             label: 'Net Liquidity',
@@ -109,14 +121,6 @@ class DashboardScreen extends ConsumerWidget {
                       ],
                     ),
                   ],
-                  const SizedBox(height: 8),
-                  _PnlCard(
-                      revenue: s.revenue,
-                      serviceFee: s.serviceFeeIncome,
-                      material: s.materialCosts,
-                      labour: s.labourCosts,
-                      personalDraw: s.personalDraw,
-                      net: s.netProfit),
                 ],
               ),
             ),
@@ -281,17 +285,15 @@ class _TreasuryCell extends StatelessWidget {
 }
 
 /// Color-coded grid of every wallet/bank balance. Tap a user-defined bank to
-/// open its ledger. System wallets (Cash, Supervisor Float) are display-only
-/// because they aren't backed by a bank row.
+/// open its ledger. The Cash tile is the only system wallet (display-only,
+/// since it isn't backed by a bank row).
 class _WalletGrid extends StatelessWidget {
   const _WalletGrid({
     required this.cash,
-    required this.supervisorFloat,
     required this.banks,
     required this.bankBalances,
   });
   final double cash;
-  final double supervisorFloat;
   final List<Bank> banks;
   final Map<String, double> bankBalances;
 
@@ -302,12 +304,6 @@ class _WalletGrid extends StatelessWidget {
         name: 'Cash',
         balance: cash,
         icon: Icons.payments,
-        onTap: null,
-      ),
-      _WalletTile(
-        name: 'Supervisor Float',
-        balance: supervisorFloat,
-        icon: Icons.engineering,
         onTap: null,
       ),
       for (final b in banks)
@@ -429,68 +425,6 @@ class _StatTile extends StatelessWidget {
                     fontWeight: FontWeight.w700, color: color)),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _PnlCard extends StatelessWidget {
-  const _PnlCard({
-    required this.revenue,
-    required this.serviceFee,
-    required this.material,
-    required this.labour,
-    required this.personalDraw,
-    required this.net,
-  });
-  final double revenue;
-  final double serviceFee;
-  final double material;
-  final double labour;
-  final double personalDraw;
-  final double net;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Profit & Loss (all-time)',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            _row(context, 'Project Revenue', revenue),
-            if (serviceFee != 0)
-              _row(context, 'Service Fee Income', serviceFee),
-            _row(context, 'Material Costs', -material),
-            _row(context, 'Labour Costs', -labour),
-            if (personalDraw != 0)
-              _row(context, 'Personal / Daily Draw', -personalDraw),
-            const Divider(),
-            _row(context, 'Net', net,
-                bold: true, color: BalanceColors.signed(context, net)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _row(BuildContext context, String label, double v,
-      {bool bold = false, Color? color}) {
-    final style = TextStyle(
-      fontWeight: bold ? FontWeight.w700 : FontWeight.normal,
-      color: color ?? (v < 0 ? BalanceColors.negative(context) : null),
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: style),
-          Text(fmtSignedMoney(v), style: style),
-        ],
       ),
     );
   }

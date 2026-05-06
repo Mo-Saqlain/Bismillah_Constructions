@@ -677,13 +677,14 @@ class EntityRepository {
   Future<void> renameMaterialType(String id, String newName) =>
       updateMaterialType(id, name: newName);
 
-  /// Deletes a user-defined material type. Built-ins are protected — calling
-  /// this on a built-in is a no-op so an accidental tap can't strip a label
-  /// out from under existing inventory rows.
+  /// Deletes a material type. Every row is freely deletable now —
+  /// historical material_inventory rows store the type name as a free-form
+  /// string, so removing the catalog row only hides the option from the
+  /// Buy Material dropdown going forward.
   Future<bool> deleteMaterialType(String id) async {
     final n = await _db.delete(
       'material_types',
-      where: 'id = ? AND is_builtin = 0',
+      where: 'id = ?',
       whereArgs: [id],
     );
     return n > 0;

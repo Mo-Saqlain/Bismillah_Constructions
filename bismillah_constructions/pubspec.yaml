@@ -54,5 +54,7 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/logo.png
+  # No bundled assets — the logo lives on disk for `flutter_launcher_icons`
+  # to consume at build time but is no longer referenced from any in-app
+  # widget, so we don't ship it inside the APK.
+

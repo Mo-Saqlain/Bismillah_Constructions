@@ -8,6 +8,11 @@ class TransactionPickerScreen extends StatelessWidget {
 
   /// Personal / daily draw was removed from the picker per spec — existing
   /// historical entries still display correctly, but no new ones can be created.
+  // Service Fee was removed from the picker — for Labour-Rate projects the
+  // fee is configured on the project itself (`Project.serviceFeePercent`)
+  // and posted automatically when the project is closed/reconciled, so a
+  // manual fee transaction is no longer a meaningful thing for the user
+  // to add. Personal Draw was already hidden per spec.
   static const _visibleKinds = <TxnKind>[
     TxnKind.materialBuy,
     TxnKind.labourPayment,
@@ -15,7 +20,6 @@ class TransactionPickerScreen extends StatelessWidget {
     TxnKind.supplierPay,
     TxnKind.receiveFromProject,
     TxnKind.walletTransfer,
-    TxnKind.serviceFee,
   ];
 
   @override

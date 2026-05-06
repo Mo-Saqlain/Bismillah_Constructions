@@ -34,7 +34,6 @@ class BalanceSheetScreen extends ConsumerWidget {
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 6),
                       _row('Cash', s.cash),
-                      _row('Supervisor Float', s.supervisorFloat),
                       AsyncView(
                         value: banks,
                         data: (list) => Column(
@@ -100,7 +99,6 @@ class BalanceSheetScreen extends ConsumerWidget {
                         await PdfGenerator.previewBalanceSheet(
                           BalanceSheetData(
                             cash: s.cash,
-                            supervisorFloat: s.supervisorFloat,
                             bankRows: [
                               for (final b in list)
                                 (b.name, s.bankBalances[b.id] ?? 0),
@@ -126,8 +124,6 @@ class BalanceSheetScreen extends ConsumerWidget {
                           headers: ['Line', 'Amount'],
                           rows: [
                             ['Cash', s.cash.toStringAsFixed(2)],
-                            ['Supervisor Float',
-                                s.supervisorFloat.toStringAsFixed(2)],
                             for (final b in list)
                               [
                                 b.name,
