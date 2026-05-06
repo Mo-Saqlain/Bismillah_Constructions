@@ -8,6 +8,8 @@ import '../../data/models/party.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/ledger_view.dart';
+import 'csv_export.dart';
 import 'pdf_generator.dart';
 
 class SupplierLedgerScreen extends ConsumerStatefulWidget {
@@ -21,18 +23,83 @@ class SupplierLedgerScreen extends ConsumerStatefulWidget {
 
 class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
   String? _projectFilter;
+  Party? _supplier;
+  List<JournalEntry> _rows = const [];
+  List<Project> _projects = const [];
+  late Future<void> _future;
 
-  Future<({Party? supplier, List<JournalEntry> rows, List<Project> projects})>
-      _load() async {
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<void> _load() async {
     final ent = await ref.read(entityRepoProvider.future);
     final ledger = await ref.read(ledgerRepoProvider.future);
     final all = await ledger.entriesForSupplier(widget.supplierId,
         projectId: _projectFilter);
-    final rows =
+    _rows =
         all.where((r) => r.accountId == Accounts.supplierPayables.id).toList();
-    final s = await ent.supplier(widget.supplierId);
-    final projects = await ent.projects();
-    return (supplier: s, rows: rows, projects: projects);
+    _supplier = await ent.supplier(widget.supplierId);
+    _projects = await ent.projects();
+  }
+
+  void _setFilter(String? v) {
+    setState(() {
+      _projectFilter = v;
+      _future = _load();
+    });
+  }
+
+  /// Convention for a supplier-payables ledger: credits increase the
+  /// outstanding amount; debits (settlements) bring it down.
+  List<LedgerRow> _toRows(List<JournalEntry> entries) {
+    double running = 0;
+    return entries.map((r) {
+      running += r.credit - r.debit;
+      return LedgerRow(
+        date: r.createdAt,
+        memo: r.description ?? '—',
+        debit: r.debit,
+        credit: r.credit,
+        balance: running,
+      );
+    }).toList();
+  }
+
+  Future<void> _exportPdf() async {
+    final s = _supplier;
+    if (s == null) return;
+    await PdfGenerator.previewSupplierLedger(SupplierLedgerData(
+      supplierName: s.name,
+      rows: _rows,
+      generatedAt: DateTime.now(),
+    ));
+  }
+
+  Future<void> _exportCsv() async {
+    final s = _supplier;
+    if (s == null) return;
+    final rows = _toRows(_rows);
+    final csv = CsvExport.build(
+      headers: ['Date', 'Memo', 'Debit', 'Credit', 'Balance'],
+      rows: rows
+          .map((r) => [
+                fmtDate(r.date),
+                r.memo,
+                r.debit > 0 ? r.debit.toStringAsFixed(2) : '',
+                r.credit > 0 ? r.credit.toStringAsFixed(2) : '',
+                r.balance.toStringAsFixed(2),
+              ])
+          .toList(),
+    );
+    await CsvExport.share(
+      fileName:
+          'supplier_ledger_${s.name}_${DateTime.now().millisecondsSinceEpoch}',
+      csv: csv,
+      subject: 'Supplier Ledger — ${s.name}',
+    );
   }
 
   @override
@@ -40,123 +107,54 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
     ref.watch(ledgerVersionProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Supplier Ledger')),
-      body: FutureBuilder<
-          ({Party? supplier, List<JournalEntry> rows, List<Project> projects})>(
-        future: _load(),
+      appBar: AppBar(
+        title: const Text('Supplier Ledger'),
+        actions: [
+          LedgerExportActions(
+            enabled: _rows.isNotEmpty,
+            onExportPdf: _exportPdf,
+            onExportCsv: _exportCsv,
+          ),
+        ],
+      ),
+      body: FutureBuilder<void>(
+        future: _future,
         builder: (ctx, snap) {
-          if (!snap.hasData) {
+          if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          final (:supplier, :rows, :projects) = snap.data!;
+          final supplier = _supplier;
           if (supplier == null) {
             return const Center(child: Text('Supplier not found.'));
           }
-          double running = 0;
-          return ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              Text(supplier.name,
-                  style: Theme.of(context).textTheme.titleLarge),
-              if (supplier.phone != null) Text(supplier.phone!),
-              if (supplier.category != null)
-                Text('Category: ${supplier.category!.label}',
-                    style: Theme.of(context).textTheme.bodySmall),
-              const SizedBox(height: 12),
-              // Project filter dropdown
-              DropdownButtonFormField<String>(
-                initialValue: _projectFilter,
-                decoration: const InputDecoration(
-                    labelText: 'Filter by Project (optional)',
-                    isDense: true),
-                items: [
-                  const DropdownMenuItem(value: null, child: Text('All Projects')),
-                  ...projects.map((p) =>
-                      DropdownMenuItem(value: p.id, child: Text(p.name))),
-                ],
-                onChanged: (v) => setState(() => _projectFilter = v),
+          final ledgerRows = _toRows(_rows);
+          final total =
+              _rows.fold<double>(0, (a, r) => a + r.credit - r.debit);
+
+          return LedgerView(
+            title: supplier.name,
+            subtitle: [
+              if (supplier.phone != null) supplier.phone,
+              if (supplier.category != null) supplier.category!.label,
+            ].whereType<String>().join(' · '),
+            rows: ledgerRows,
+            totalLabel: 'Net Outstanding',
+            totalValue: total,
+            emptyMessage: 'No transactions with this supplier yet.',
+            headerBelowTitle: DropdownButtonFormField<String>(
+              initialValue: _projectFilter,
+              decoration: const InputDecoration(
+                labelText: 'Filter by Project (optional)',
+                isDense: true,
               ),
-              const SizedBox(height: 12),
-              if (rows.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(
-                      child: Text('No transactions with this supplier yet.')),
-                )
-              else
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      children: [
-                        const Row(
-                          children: [
-                            _H('Date', flex: 3),
-                            _H('Memo', flex: 4),
-                            _H('Dr', flex: 2, right: true),
-                            _H('Cr', flex: 2, right: true),
-                            _H('Bal', flex: 3, right: true),
-                          ],
-                        ),
-                        const Divider(),
-                        ...rows.map((r) {
-                          running += r.credit - r.debit;
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              children: [
-                                _C(fmtDate(r.createdAt), flex: 3),
-                                _C(r.description ?? '—', flex: 4),
-                                _C(r.debit > 0 ? fmtMoney(r.debit) : '',
-                                    flex: 2, right: true),
-                                _C(r.credit > 0 ? fmtMoney(r.credit) : '',
-                                    flex: 2, right: true),
-                                _C(fmtMoney(running),
-                                    flex: 3, right: true, bold: true),
-                              ],
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Net Outstanding',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
-                    Text(
-                      fmtMoney(rows.fold<double>(
-                          0, (a, r) => a + r.credit - r.debit)),
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 18),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Export as PDF'),
-                onPressed: rows.isEmpty
-                    ? null
-                    : () => PdfGenerator.previewSupplierLedger(
-                          SupplierLedgerData(
-                            supplierName: supplier.name,
-                            rows: rows,
-                            generatedAt: DateTime.now(),
-                          ),
-                        ),
-              ),
-            ],
+              items: [
+                const DropdownMenuItem(
+                    value: null, child: Text('All Projects')),
+                ..._projects.map((p) =>
+                    DropdownMenuItem(value: p.id, child: Text(p.name))),
+              ],
+              onChanged: _setFilter,
+            ),
           );
         },
       ),
@@ -186,10 +184,11 @@ class SupplierLedgerPickerScreen extends ConsumerWidget {
               final s = list[i];
               return Card(
                 child: ListTile(
-                  leading: const CircleAvatar(
-                      child: Icon(Icons.local_shipping)),
+                  leading:
+                      const CircleAvatar(child: Icon(Icons.local_shipping)),
                   title: Text(s.name),
-                  subtitle: s.category != null ? Text(s.category!.label) : null,
+                  subtitle:
+                      s.category != null ? Text(s.category!.label) : null,
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
                     context,
@@ -206,37 +205,4 @@ class SupplierLedgerPickerScreen extends ConsumerWidget {
       ),
     );
   }
-}
-
-class _H extends StatelessWidget {
-  const _H(this.text, {required this.flex, this.right = false});
-  final String text;
-  final int flex;
-  final bool right;
-  @override
-  Widget build(BuildContext context) => Expanded(
-        flex: flex,
-        child: Text(text,
-            textAlign: right ? TextAlign.right : TextAlign.left,
-            style: const TextStyle(
-                fontWeight: FontWeight.w600, fontSize: 12)),
-      );
-}
-
-class _C extends StatelessWidget {
-  const _C(this.text,
-      {required this.flex, this.right = false, this.bold = false});
-  final String text;
-  final int flex;
-  final bool right;
-  final bool bold;
-  @override
-  Widget build(BuildContext context) => Expanded(
-        flex: flex,
-        child: Text(text,
-            textAlign: right ? TextAlign.right : TextAlign.left,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: bold ? FontWeight.w700 : FontWeight.normal)),
-      );
 }

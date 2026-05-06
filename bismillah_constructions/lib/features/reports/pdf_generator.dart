@@ -25,23 +25,29 @@ class IncomeStatementData {
 
 class BalanceSheetData {
   final double cash;
-  final double bankHbl;
-  final double bankMeezan;
-  final double receivables;
+  final double supervisorFloat;
+  /// (name, balance) pairs for each user-defined bank/wallet.
+  final List<(String, double)> bankRows;
+  final double counterReceivables;
   final double payables;
+  final double counterPayables;
   final double equity;
   final DateTime generatedAt;
   BalanceSheetData({
     required this.cash,
-    required this.bankHbl,
-    required this.bankMeezan,
-    required this.receivables,
+    required this.supervisorFloat,
+    required this.bankRows,
+    required this.counterReceivables,
     required this.payables,
+    required this.counterPayables,
     required this.equity,
     required this.generatedAt,
   });
-  double get assets => cash + bankHbl + bankMeezan + receivables;
-  double get liabPlusEquity => payables + equity;
+  double get totalBanks =>
+      bankRows.fold<double>(0, (a, r) => a + r.$2);
+  double get assets =>
+      cash + supervisorFloat + totalBanks + counterReceivables;
+  double get liabPlusEquity => payables + counterPayables + equity;
   bool get balanced => (assets - liabPlusEquity).abs() < 0.01;
 }
 
@@ -51,6 +57,28 @@ class SupplierLedgerData {
   final DateTime generatedAt;
   SupplierLedgerData({
     required this.supplierName,
+    required this.rows,
+    required this.generatedAt,
+  });
+}
+
+class BankLedgerData {
+  final String bankName;
+  final List<JournalEntry> rows;
+  final DateTime generatedAt;
+  BankLedgerData({
+    required this.bankName,
+    required this.rows,
+    required this.generatedAt,
+  });
+}
+
+class ProjectLedgerData {
+  final String projectName;
+  final List<JournalEntry> rows;
+  final DateTime generatedAt;
+  ProjectLedgerData({
+    required this.projectName,
     required this.rows,
     required this.generatedAt,
   });
@@ -75,6 +103,20 @@ class PdfGenerator {
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat f) => _buildSupplierLedger(d),
       name: 'Supplier Ledger — ${d.supplierName}',
+    );
+  }
+
+  static Future<void> previewBankLedger(BankLedgerData d) async {
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat f) => _buildBankLedger(d),
+      name: 'Bank Ledger — ${d.bankName}',
+    );
+  }
+
+  static Future<void> previewProjectLedger(ProjectLedgerData d) async {
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat f) => _buildProjectLedger(d),
+      name: 'Project Ledger — ${d.projectName}',
     );
   }
 
@@ -155,15 +197,18 @@ class PdfGenerator {
               style: pw.TextStyle(
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
           _line('  Cash', d.cash),
-          _line('  Bank — HBL', d.bankHbl),
-          _line('  Bank — Meezan', d.bankMeezan),
-          _line('  Client Receivables', d.receivables),
+          _line('  Supervisor Float', d.supervisorFloat),
+          for (final r in d.bankRows) _line('  ${r.$1}', r.$2),
+          if (d.counterReceivables > 0)
+            _line('  Counter Receivables', d.counterReceivables),
           _line('Total Assets', d.assets, bold: true),
           pw.SizedBox(height: 12),
           pw.Text('Liabilities & Equity',
               style: pw.TextStyle(
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
           _line('  Supplier Payables', d.payables),
+          if (d.counterPayables > 0)
+            _line('  Counter Payables', d.counterPayables),
           _line("  Owner's Equity", d.equity),
           _line('Total Liabilities + Equity', d.liabPlusEquity, bold: true),
           pw.SizedBox(height: 12),
@@ -183,6 +228,97 @@ class PdfGenerator {
             ),
         ],
       ),
+    ));
+    return doc.save();
+  }
+
+  static Future<Uint8List> _buildBankLedger(BankLedgerData d) async {
+    final doc = pw.Document();
+    double running = 0;
+    final tableRows = <List<String>>[
+      ['Date', 'Memo', 'Debit (in)', 'Credit (out)', 'Balance'],
+    ];
+    for (final r in d.rows) {
+      running += r.debit - r.credit;
+      tableRows.add([
+        fmtDate(r.createdAt),
+        r.description ?? '—',
+        r.debit > 0 ? fmtMoney(r.debit) : '',
+        r.credit > 0 ? fmtMoney(r.credit) : '',
+        fmtMoney(running),
+      ]);
+    }
+    doc.addPage(pw.MultiPage(
+      build: (ctx) => [
+        _header('Bank / Wallet Ledger',
+            '${d.bankName}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+        pw.SizedBox(height: 12),
+        pw.TableHelper.fromTextArray(
+          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          headerDecoration:
+              const pw.BoxDecoration(color: PdfColors.grey200),
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerLeft,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+            4: pw.Alignment.centerRight,
+          },
+          data: tableRows,
+        ),
+        pw.SizedBox(height: 16),
+        pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text('Net Balance: ${fmtMoney(running)}',
+              style: pw.TextStyle(
+                  fontSize: 14, fontWeight: pw.FontWeight.bold)),
+        ),
+      ],
+    ));
+    return doc.save();
+  }
+
+  static Future<Uint8List> _buildProjectLedger(ProjectLedgerData d) async {
+    final doc = pw.Document();
+    double running = 0;
+    final tableRows = <List<String>>[
+      ['Date', 'Memo', 'Debit', 'Credit', 'Running'],
+    ];
+    final byTxn = <String, List<JournalEntry>>{};
+    for (final r in d.rows) {
+      (byTxn[r.transactionId] ??= []).add(r);
+    }
+    for (final pair in byTxn.values) {
+      if (pair.length != 2) continue;
+      final dr = pair.firstWhere((e) => e.debit > 0);
+      running += dr.debit - dr.credit;
+      tableRows.add([
+        fmtDate(dr.createdAt),
+        dr.description ?? '—',
+        dr.debit > 0 ? fmtMoney(dr.debit) : '',
+        dr.credit > 0 ? fmtMoney(dr.credit) : '',
+        fmtMoney(running),
+      ]);
+    }
+    doc.addPage(pw.MultiPage(
+      build: (ctx) => [
+        _header('Project Ledger',
+            '${d.projectName}  ·  Generated ${fmtDateTime(d.generatedAt)}'),
+        pw.SizedBox(height: 12),
+        pw.TableHelper.fromTextArray(
+          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          headerDecoration:
+              const pw.BoxDecoration(color: PdfColors.grey200),
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerLeft,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+            4: pw.Alignment.centerRight,
+          },
+          data: tableRows,
+        ),
+      ],
     ));
     return doc.save();
   }

@@ -5,6 +5,7 @@ import '../../core/formatters.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import 'csv_export.dart';
+import 'pdf_generator.dart';
 
 class BalanceSheetScreen extends ConsumerWidget {
   const BalanceSheetScreen({super.key});
@@ -75,78 +76,87 @@ class BalanceSheetScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
               if (!balanced)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    border: Border.all(color: Colors.red.shade300),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning, color: Colors.red),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Assets do not equal Liabilities + Equity. '
-                          'Difference: ${fmtMoney(s.assets - liabPlusEquity)}',
-                          style: const TextStyle(color: Colors.red),
-                        ),
-                      ),
-                    ],
-                  ),
+                _StatusBanner(
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                  ok: false,
+                  message:
+                      'Assets do not equal Liabilities + Equity. Difference: ${fmtMoney(s.assets - liabPlusEquity)}',
                 )
               else
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    border: Border.all(color: Colors.green.shade300),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.check_circle, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text('Books are balanced.'),
-                    ],
-                  ),
+                _StatusBanner(
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                  ok: true,
+                  message: 'Books are balanced.',
                 ),
               const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.file_download),
-                label: const Text('Export CSV'),
-                onPressed: () async {
-                  final list = await ref.read(banksProvider.future);
-                  final csv = CsvExport.build(
-                    headers: ['Line', 'Amount'],
-                    rows: [
-                      ['Cash', s.cash.toStringAsFixed(2)],
-                      ['Supervisor Float',
-                          s.supervisorFloat.toStringAsFixed(2)],
-                      for (final b in list)
-                        [b.name,
-                            (s.bankBalances[b.id] ?? 0).toStringAsFixed(2)],
-                      if (s.counterReceivables > 0)
-                        ['Counter Receivables',
-                            s.counterReceivables.toStringAsFixed(2)],
-                      ['Total Assets', s.assets.toStringAsFixed(2)],
-                      ['Supplier Payables', s.payables.toStringAsFixed(2)],
-                      if (s.counterPayables > 0)
-                        ['Counter Payables',
-                            s.counterPayables.toStringAsFixed(2)],
-                      ["Owner's Equity", s.equity.toStringAsFixed(2)],
-                      ['Total Liabilities + Equity',
-                          liabPlusEquity.toStringAsFixed(2)],
-                    ],
-                  );
-                  await CsvExport.share(
-                    fileName:
-                        'balance_sheet_${DateTime.now().millisecondsSinceEpoch}',
-                    csv: csv,
-                    subject: 'Balance Sheet',
-                  );
-                },
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.picture_as_pdf),
+                      label: const Text('PDF'),
+                      onPressed: () async {
+                        final list = await ref.read(banksProvider.future);
+                        await PdfGenerator.previewBalanceSheet(
+                          BalanceSheetData(
+                            cash: s.cash,
+                            supervisorFloat: s.supervisorFloat,
+                            bankRows: [
+                              for (final b in list)
+                                (b.name, s.bankBalances[b.id] ?? 0),
+                            ],
+                            counterReceivables: s.counterReceivables,
+                            payables: s.payables,
+                            counterPayables: s.counterPayables,
+                            equity: s.equity,
+                            generatedAt: DateTime.now(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.file_download),
+                      label: const Text('CSV'),
+                      onPressed: () async {
+                        final list = await ref.read(banksProvider.future);
+                        final csv = CsvExport.build(
+                          headers: ['Line', 'Amount'],
+                          rows: [
+                            ['Cash', s.cash.toStringAsFixed(2)],
+                            ['Supervisor Float',
+                                s.supervisorFloat.toStringAsFixed(2)],
+                            for (final b in list)
+                              [
+                                b.name,
+                                (s.bankBalances[b.id] ?? 0).toStringAsFixed(2)
+                              ],
+                            if (s.counterReceivables > 0)
+                              ['Counter Receivables',
+                                  s.counterReceivables.toStringAsFixed(2)],
+                            ['Total Assets', s.assets.toStringAsFixed(2)],
+                            ['Supplier Payables',
+                                s.payables.toStringAsFixed(2)],
+                            if (s.counterPayables > 0)
+                              ['Counter Payables',
+                                  s.counterPayables.toStringAsFixed(2)],
+                            ["Owner's Equity", s.equity.toStringAsFixed(2)],
+                            ['Total Liabilities + Equity',
+                                liabPlusEquity.toStringAsFixed(2)],
+                          ],
+                        );
+                        await CsvExport.share(
+                          fileName:
+                              'balance_sheet_${DateTime.now().millisecondsSinceEpoch}',
+                          csv: csv,
+                          subject: 'Balance Sheet',
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ],
           );
@@ -171,4 +181,49 @@ class BalanceSheetScreen extends ConsumerWidget {
           ],
         ),
       );
+}
+
+/// Banner that adapts to dark mode — `Colors.green.shade50` was nearly
+/// invisible on dark backgrounds, so we now derive both the background and
+/// foreground from the [ColorScheme] so the message stays legible everywhere.
+class _StatusBanner extends StatelessWidget {
+  const _StatusBanner({
+    required this.ok,
+    required this.message,
+    required this.isDark,
+  });
+  final bool ok;
+  final String message;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = ok
+        ? (isDark ? Colors.green.shade900 : Colors.green.shade50)
+        : (isDark ? Colors.red.shade900 : Colors.red.shade50);
+    final fg = ok
+        ? (isDark ? Colors.green.shade100 : Colors.green.shade900)
+        : (isDark ? Colors.red.shade100 : Colors.red.shade900);
+    final border = ok
+        ? (isDark ? Colors.green.shade400 : Colors.green.shade300)
+        : (isDark ? Colors.red.shade400 : Colors.red.shade300);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(ok ? Icons.check_circle : Icons.warning, color: fg),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message,
+                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
 }

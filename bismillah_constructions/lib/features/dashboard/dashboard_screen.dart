@@ -7,6 +7,7 @@ import '../../data/models/bank.dart';
 import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../reports/bank_ledger_screen.dart';
 import '../settings/settings_screen.dart';
 import '../transactions/transaction_history_screen.dart';
 import '../transactions/transaction_picker_screen.dart';
@@ -72,16 +73,11 @@ class DashboardScreen extends ConsumerWidget {
                   const SizedBox(height: 8),
                   AsyncView<List<Bank>>(
                     value: banks,
-                    data: (banksList) => _BalanceCard(
-                      title: 'Liquid Cash',
-                      value: s.liquidCash,
-                      icon: Icons.account_balance,
-                      breakdown: [
-                        ('Cash', s.cash),
-                        ('Supervisor Float', s.supervisorFloat),
-                        for (final b in banksList)
-                          (b.name, s.bankBalances[b.id] ?? 0),
-                      ],
+                    data: (banksList) => _WalletGrid(
+                      cash: s.cash,
+                      supervisorFloat: s.supervisorFloat,
+                      banks: banksList,
+                      bankBalances: s.bankBalances,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -291,53 +287,124 @@ class _TreasuryCell extends StatelessWidget {
   }
 }
 
-class _BalanceCard extends StatelessWidget {
-  const _BalanceCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.breakdown,
+/// Color-coded grid of every wallet/bank balance. Tap a user-defined bank to
+/// open its ledger. System wallets (Cash, Supervisor Float) are display-only
+/// because they aren't backed by a bank row.
+class _WalletGrid extends StatelessWidget {
+  const _WalletGrid({
+    required this.cash,
+    required this.supervisorFloat,
+    required this.banks,
+    required this.bankBalances,
   });
-  final String title;
-  final double value;
-  final IconData icon;
-  final List<(String, double)> breakdown;
+  final double cash;
+  final double supervisorFloat;
+  final List<Bank> banks;
+  final Map<String, double> bankBalances;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final tiles = <Widget>[
+      _WalletTile(
+        name: 'Cash',
+        balance: cash,
+        icon: Icons.payments,
+        onTap: null,
+      ),
+      _WalletTile(
+        name: 'Supervisor Float',
+        balance: supervisorFloat,
+        icon: Icons.engineering,
+        onTap: null,
+      ),
+      for (final b in banks)
+        _WalletTile(
+          name: b.name,
+          balance: bankBalances[b.id] ?? 0,
+          icon: Icons.account_balance,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => BankLedgerScreen(bank: b)),
+          ),
+        ),
+    ];
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(icon, color: scheme.primary),
-                const SizedBox(width: 8),
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(fmtMoney(value),
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineMedium
-                    ?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: BalanceColors.signed(context, value))),
+            Text('Wallets & Banks',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 16,
-              runSpacing: 4,
-              children: breakdown
-                  .where((b) => b.$2 != 0)
-                  .map((b) => Text('${b.$1}: ${fmtMoney(b.$2)}',
-                      style: Theme.of(context).textTheme.bodySmall))
-                  .toList(),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 2.4,
+              children: tiles,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WalletTile extends StatelessWidget {
+  const _WalletTile({
+    required this.name,
+    required this.balance,
+    required this.icon,
+    required this.onTap,
+  });
+  final String name;
+  final double balance;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = BalanceColors.signed(context, balance);
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600)),
+                  ),
+                  if (onTap != null)
+                    Icon(Icons.chevron_right,
+                        size: 14, color: scheme.onSurfaceVariant),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(fmtMoney(balance),
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: color)),
+            ],
+          ),
         ),
       ),
     );

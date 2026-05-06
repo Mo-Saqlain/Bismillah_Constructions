@@ -131,14 +131,6 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
       builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('View info'),
-              onTap: () {
-                Navigator.pop(sheetCtx);
-                _showSupplierInfo(context, p);
-              },
-            ),
             if (!p.archived)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
@@ -177,50 +169,6 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
       ),
     );
   }
-
-  void _showSupplierInfo(BuildContext context, Party p) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(p.name),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (p.phone != null) _kv('Phone', p.phone!),
-              if (p.category != null) _kv('Category', p.category!.label),
-              if (p.taxStatus != null) _kv('Tax status', p.taxStatus!),
-              if (p.bankDetails != null) _kv('Bank details', p.bankDetails!),
-              _kv('Archived', p.archived ? 'Yes' : 'No'),
-              _kv('Created', fmtDateTime(p.createdAt)),
-              if (p.archivedAt != null)
-                _kv('Archived at', fmtDateTime(p.archivedAt!)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-                width: 110,
-                child: Text(k,
-                    style: const TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text(v)),
-          ],
-        ),
-      );
 
   void _showSupplierForm(BuildContext context, WidgetRef ref,
       {Party? existing}) {

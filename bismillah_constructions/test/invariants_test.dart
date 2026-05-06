@@ -13,7 +13,6 @@ import 'package:bismillah_constructions/core/constants.dart';
 import 'package:bismillah_constructions/data/db/local_db.dart';
 import 'package:bismillah_constructions/data/repositories/entity_repository.dart';
 import 'package:bismillah_constructions/data/repositories/ledger_repository.dart';
-import 'package:bismillah_constructions/data/services/mongo_backup_service.dart';
 
 late Database _db;
 late EntityRepository _entityRepo;
@@ -244,21 +243,6 @@ void main() {
   // -------------------------------------------------------------------
   // Persistence & sync
   // -------------------------------------------------------------------
-
-  test('Backup Debouncing: 5 rapid scheduleUpload calls fire only once',
-      () async {
-    final svc = MongoBackupService(_entityRepo);
-    addTearDown(svc.dispose);
-
-    for (var i = 0; i < 5; i++) {
-      svc.scheduleUpload(debounce: const Duration(milliseconds: 100));
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-    }
-
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    expect(svc.debouncedFireCount, 1,
-        reason: 'bursts must collapse to a single upload');
-  });
 
   test(
       'Aging Analysis (Payables): T-15 / T-45 / T-100 days bucketed correctly',

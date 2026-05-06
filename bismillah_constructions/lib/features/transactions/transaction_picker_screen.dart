@@ -6,16 +6,27 @@ import 'transaction_form_screen.dart';
 class TransactionPickerScreen extends StatelessWidget {
   const TransactionPickerScreen({super.key});
 
+  /// Personal / daily draw was removed from the picker per spec — existing
+  /// historical entries still display correctly, but no new ones can be created.
+  static const _visibleKinds = <TxnKind>[
+    TxnKind.materialBuy,
+    TxnKind.labourPayment,
+    TxnKind.supplierPay,
+    TxnKind.receiveFromProject,
+    TxnKind.walletTransfer,
+    TxnKind.serviceFee,
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('New Transaction')),
       body: ListView.separated(
         padding: const EdgeInsets.all(12),
-        itemCount: TxnKind.values.length,
+        itemCount: _visibleKinds.length,
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
-          final kind = TxnKind.values[i];
+          final kind = _visibleKinds[i];
           return Card(
             child: ListTile(
               leading: CircleAvatar(child: Icon(_iconFor(kind))),

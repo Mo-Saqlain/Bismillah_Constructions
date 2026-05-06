@@ -1,4 +1,4 @@
-name: Bismillah
+name: bismillah_constructions
 description: "Bismillah — offline-first double-entry ledger for construction projects."
 publish_to: 'none'
 version: 1.0.0+1
@@ -24,10 +24,6 @@ dependencies:
   # Remote DB (sync target)
   supabase_flutter: ^2.5.6
 
-  # MongoDB cloud backup (full DB snapshots via GridFS)
-  mongo_dart: ^0.10.4
-  crypto: ^3.0.3
-
   # Connectivity for sync trigger
   connectivity_plus: ^6.0.3
 
@@ -40,6 +36,9 @@ dependencies:
   pdf: ^3.11.0
   printing: ^5.13.0
   share_plus: ^9.0.0
+
+  # Backup file picker (import .db file)
+  file_picker: ^8.0.7
 
 dev_dependencies:
   flutter_test:

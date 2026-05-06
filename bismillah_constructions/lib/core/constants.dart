@@ -177,7 +177,7 @@ extension TxnKindX on TxnKind {
   String get label => switch (this) {
         TxnKind.materialBuy => 'Material Buy (Credit)',
         TxnKind.labourPayment => 'Labour Payment',
-        TxnKind.supplierPay => 'Supplier Payment',
+        TxnKind.supplierPay => 'Material Payment',
         TxnKind.receiveFromProject => 'Receive from Project',
         TxnKind.walletTransfer => 'Wallet Transfer',
         TxnKind.personalDraw => 'Personal / Daily Draw',
@@ -188,7 +188,8 @@ extension TxnKindX on TxnKind {
           'Buy material on credit from a supplier (project required)',
         TxnKind.labourPayment =>
           'Pay a labour provider for a project (project required)',
-        TxnKind.supplierPay => 'Settle a supplier payable from cash or bank',
+        TxnKind.supplierPay =>
+          'Settle a payable to a material supplier from cash or bank',
         TxnKind.receiveFromProject =>
           'Receive money from the project — booked as project revenue',
         TxnKind.walletTransfer =>
@@ -221,7 +222,6 @@ extension ChangeActionX on ChangeAction {
 class SettingsKeys {
   static const themeMode = 'theme_mode'; // 'light' | 'dark' | 'system'
   static const lastBackupAt = 'last_backup_at';
-  static const lastCloudBackupAt = 'last_cloud_backup_at';
   static const deviceId = 'device_id';
 }
 
@@ -230,34 +230,4 @@ class SupabaseConfig {
   static const anonKey =
       String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
   static bool get configured => url.isNotEmpty && anonKey.isNotEmpty;
-}
-
-/// Hardcoded MongoDB connection for online backup.
-///
-/// **Setup**:
-///  1. Sign in to https://cloud.mongodb.com (free M0 tier is enough).
-///  2. Build a Database → choose M0 → pick a region → create cluster.
-///  3. Database Access → Add new database user → username + password (save these).
-///  4. Network Access → Add IP Address → "Allow access from anywhere" (0.0.0.0/0)
-///     for development, or your specific IP for production.
-///  5. Connect → Drivers → Dart → copy the `mongodb+srv://...` URI.
-///  6. Replace [_uri] below with that URI (substitute the placeholder password).
-///
-/// You can also override at build/run time:
-///   `flutter run --dart-define=MONGO_URI=mongodb+srv://user:pass@cluster.../`
-class MongoConfig {
-  /// PASTE YOUR ATLAS URI HERE. Leave the trailing `/<dbname>` off — the code
-  /// appends [dbName] for you.
-  static const _uri =
-      'mongodb+srv://saqlain:d2689b1d@cluster0.5z3lijl.mongodb.net/?appName=Cluster0';
-
-  static const uri =
-      String.fromEnvironment('MONGO_URI', defaultValue: _uri);
-  static const dbName = 'bismillah_erp';
-
-  /// True when the URI looks real (i.e., not the placeholder). Used by the
-  /// service to silently skip uploads on a fresh checkout that hasn't been
-  /// configured yet.
-  static bool get configured =>
-      uri.isNotEmpty && !uri.contains('USER:PASS');
 }

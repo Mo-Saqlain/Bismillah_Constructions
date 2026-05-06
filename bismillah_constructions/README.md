@@ -1,7 +1,7 @@
 # Bismillah Constructions ERP
 
 > Solo-Con ERP — an offline-first, double-entry construction-project ledger built in Flutter.
-> Designed for a single operator running multiple sites: cash, bank, supplier, customer, material, labour, and project P&L all in one place, with redundant local + cloud backups.
+> Designed for a single operator running multiple sites: cash, bank, supplier, customer, material, labour, and project P&L all in one place, with rolling local backups + manual share-out.
 
 ---
 
@@ -41,7 +41,6 @@ Every cash movement is recorded as a balanced **debit/credit pair** on a fixed C
 | State management       | `flutter_riverpod` 2.x                              |
 | Local DB               | `sqflite` + `sqflite_common_ffi` (desktop)          |
 | Cloud row sync         | `supabase_flutter` (journal_entries push only)      |
-| Cloud DB snapshot      | `mongo_dart` (single-doc binary upload)             |
 | Connectivity           | `connectivity_plus`                                 |
 | Charts                 | `fl_chart`                                          |
 | PDF reports            | `pdf` + `printing`                                  |
@@ -67,7 +66,7 @@ Every cash movement is recorded as a balanced **debit/credit pair** on a fixed C
 │                  Riverpod providers (lib/providers/)               │
 │                                                                    │
 │   dbProvider · ledgerRepoProvider · entityRepoProvider             │
-│   syncServiceFutureProvider · mongoBackupServiceProvider           │
+│   syncServiceFutureProvider · backupServiceProvider                │
 │   commitSyncWiringProvider · backupBootCheckProvider               │
 │   accountSummaryProvider · projectsProvider · …                    │
 └──────────┬─────────────────┬────────────────────┬──────────────────┘
@@ -77,8 +76,7 @@ Every cash movement is recorded as a balanced **debit/credit pair** on a fixed C
 │  Repositories    │ │  Services       │ │  External services      │
 │                  │ │                 │ │                         │
 │  LedgerRepository│ │  BackupService  │ │  Supabase (rows)        │
-│  EntityRepository│ │  SyncService    │ │  MongoDB (snapshots)    │
-│                  │ │  MongoBackupSvc │ │                         │
+│  EntityRepository│ │  SyncService    │ │                         │
 └─────────┬────────┘ └────────┬────────┘ └─────────────────────────┘
           │                   │
           ▼                   ▼
@@ -122,8 +120,7 @@ lib/
 │   │   ├── ledger_repository.dart      # journal_entries writes + reads + reports
 │   │   └── entity_repository.dart      # projects / parties / banks / settings
 │   ├── services/
-│   │   ├── backup_service.dart         # local file backup, 6 h cold-boot trigger
-│   │   └── mongo_backup_service.dart   # MongoDB cloud snapshot, debounced
+│   │   └── backup_service.dart         # local file backup, 6 h cold-boot trigger, retention
 │   └── sync/
 │       └── sync_service.dart           # Supabase row push (journal_entries)
 ├── providers/
@@ -183,7 +180,7 @@ Recorded for: delete, restore, archive, unarchive, edit. `device_id` is a stable
 - `customers`, `suppliers` — `Party` rows with category / tax_status / bank_details fields
 - `banks`, `counter_entities` — supporting entities
 - `material_inventory` — purchase / consumption rows (used for BvA + price-trend charts)
-- `app_settings` — opaque `{key, value}` for theme, backup timestamps, mongo URI, device_id, etc.
+- `app_settings` — opaque `{key, value}` for theme, backup timestamp, device_id, etc.
 
 ### 5.4 Chart of Accounts (`core/constants.dart` → `Accounts`)
 
@@ -272,23 +269,16 @@ There are **three** independent persistence layers, each with a different role:
 - Output dir on desktop: `<AppDocuments>/Bismillah_Backups/`.
 - Two files written each run: `solo_con_<UTC-stamp>.db` + a rolling `solo_con_latest.db` for fast share/import.
 - `maybeRunSilentBackup()` gates on `last_backup_at` setting (≥ 6 h since last).
-- `shareBackup()` triggers system share sheet for portable .db hand-off.
-- `importBackup(path)` saves a `.before_import` safety copy then overwrites the live DB.
+- `shareLatestBackup()` / `shareBackup(path)` push the file through the system share sheet — primary off-device path is **WhatsApp / Gmail / Drive** (no embedded cloud client).
+- `importBackup(path)` validates the SQLite header, saves a `.before_import` safety copy, then overwrites the live DB.
+- `rollbackLastImport()` swaps the current DB back to `.before_import` (saves the displaced one as `.before_rollback` — undo for the undo).
+- `listBackups()` / `deleteBackup(path)` power the **Backup History** screen.
+- Retention: `BackupService.retentionCount` (default 30) — older timestamped snapshots are pruned silently after each run; the `_latest.db` pointer is always kept.
 
-### 8.2 MongoDB cloud snapshot — `MongoBackupService`
-- Collection: `db_snapshots` in the user-configured database (default `bismillah_erp`).
-- Each upload inserts a new immutable doc + upserts a per-device `latest_<deviceId>` pointer document.
-- Doc shape: `{deviceId, kind, createdAt, sizeBytes, sha1, appVersion, data: BsonBinary}`.
-- 15 MB cap per snapshot (Mongo BSON limit is 16 MB).
-- Per-device retention: keeps the newest 20 snapshots.
-- `scheduleUpload({debounce: 5s})` collapses bursts of commits into one upload.
-- `downloadTo(path)` retrieves the latest pointer (or any explicit `_id`) and writes it to disk; restore is then handled by `BackupService.importBackup()`.
-
-### 8.3 Per-commit wiring — `commitSyncWiringProvider`
+### 8.2 Per-commit wiring — `commitSyncWiringProvider`
 ```dart
 ledger.addCommitListener(() {
-  cloud.scheduleUpload();   // MongoDB snapshot, debounced
-  unawaited(sync.syncNow()); // Supabase row push
+  unawaited(sync.syncNow()); // Supabase row push (only if SUPABASE_* configured)
 });
 ```
 Watched once at app boot from `app.dart`.
@@ -316,8 +306,7 @@ If unset, the app runs **local-only** and the dashboard sync indicator shows "Lo
 
 ### 10.2 In-app configuration (`Settings` screen)
 - **Theme** — System / Light / Dark
-- **Backup** — last backup timestamp, Run backup now, Export / Share latest backup
-- **Cloud Backup (MongoDB)** — URI, DB name, enable/disable toggle, Test connection, Backup now, Restore from cloud
+- **Backup** — last backup timestamp, Run backup now, Share latest backup, Import backup, Backup history (browse / share / restore / delete past snapshots), Undo last import
 - **Audit** — Change Log viewer
 
 ### 10.3 Build-output relocation (Windows + OneDrive)

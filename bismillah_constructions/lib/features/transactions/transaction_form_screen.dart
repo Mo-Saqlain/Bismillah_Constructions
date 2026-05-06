@@ -268,21 +268,54 @@ class _TransactionFormScreenState
                 const SizedBox(height: 12),
                 AsyncView<List<Party>>(
                   value: suppliers,
-                  data: (list) => DropdownButtonFormField<String>(
-                    initialValue: _supplierId,
-                    decoration: InputDecoration(
-                      labelText: _k == TxnKind.labourPayment
-                          ? 'Labour Provider (Supplier) *'
-                          : 'Supplier *',
-                    ),
-                    items: list
-                        .map((s) => DropdownMenuItem(
-                            value: s.id, child: Text(s.name)))
-                        .toList(),
-                    onChanged: (v) => setState(() => _supplierId = v),
-                    validator: (v) =>
-                        v == null ? 'Select a supplier' : null,
-                  ),
+                  data: (list) {
+                    // Filter suppliers by category for category-specific txn kinds.
+                    // labour payments → labor suppliers only; material payments
+                    // (TxnKind.supplierPay) and material buys → material suppliers
+                    // only. Suppliers without a category fall through (legacy data).
+                    final filtered = switch (_k) {
+                      TxnKind.labourPayment => list
+                          .where((s) =>
+                              s.category == null ||
+                              s.category == SupplierCategory.labor)
+                          .toList(),
+                      TxnKind.supplierPay || TxnKind.materialBuy => list
+                          .where((s) =>
+                              s.category == null ||
+                              s.category == SupplierCategory.material)
+                          .toList(),
+                      _ => list,
+                    };
+                    if (filtered.isEmpty) {
+                      return Text(
+                        _k == TxnKind.labourPayment
+                            ? 'No labour-category suppliers. Add one in Suppliers.'
+                            : 'No material-category suppliers. Add one in Suppliers.',
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      );
+                    }
+                    // Drop a stale selection that's no longer in the filtered list.
+                    if (_supplierId != null &&
+                        !filtered.any((s) => s.id == _supplierId)) {
+                      _supplierId = null;
+                    }
+                    return DropdownButtonFormField<String>(
+                      initialValue: _supplierId,
+                      decoration: InputDecoration(
+                        labelText: _k == TxnKind.labourPayment
+                            ? 'Labour Provider *'
+                            : 'Material Supplier *',
+                      ),
+                      items: filtered
+                          .map((s) => DropdownMenuItem(
+                              value: s.id, child: Text(s.name)))
+                          .toList(),
+                      onChanged: (v) => setState(() => _supplierId = v),
+                      validator: (v) =>
+                          v == null ? 'Select a supplier' : null,
+                    );
+                  },
                 ),
               ],
 

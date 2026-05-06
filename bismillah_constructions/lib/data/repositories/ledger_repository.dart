@@ -210,6 +210,22 @@ class LedgerRepository {
     );
   }
 
+  /// Opening balance for a freshly-created bank/wallet. Posts
+  /// Dr Bank / Cr Owner's Equity so the asset is properly recognized in the
+  /// double-entry books.
+  Future<String?> postOpeningBalance({
+    required Account bankAccount,
+    required double amount,
+  }) async {
+    if (amount <= 0) return null;
+    return _post(
+      debitAccount: bankAccount,
+      creditAccount: Accounts.ownersEquity,
+      amount: amount,
+      description: 'Opening balance',
+    );
+  }
+
   /// Service fee for Labour-Rate model (spec section 2 / interim fees).
   Future<String> postServiceFee({
     required double amount,
@@ -449,6 +465,21 @@ class LedgerRepository {
     final rows = await _db.query('journal_entries',
         where: where.toString(),
         whereArgs: [customerId],
+        orderBy: 'created_at ASC');
+    return rows.map(JournalEntry.fromMap).toList();
+  }
+
+  /// Every journal row that touches a specific account (typically a bank /
+  /// wallet id), oldest → newest. Used by the bank ledger report to build a
+  /// running balance.
+  Future<List<JournalEntry>> entriesForAccount(String accountId,
+      {bool includeDeleted = false}) async {
+    final where = StringBuffer('account_id = ?');
+    final args = <Object>[accountId];
+    if (!includeDeleted) where.write(' AND is_deleted = 0');
+    final rows = await _db.query('journal_entries',
+        where: where.toString(),
+        whereArgs: args,
         orderBy: 'created_at ASC');
     return rows.map(JournalEntry.fromMap).toList();
   }

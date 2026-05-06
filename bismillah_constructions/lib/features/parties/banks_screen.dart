@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../data/models/bank.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../reports/bank_ledger_screen.dart';
 
 /// Banks & wallets are first-class accounts now: the user can add as many as
 /// they need (the previous hardcoded HBL/Meezan/Alfalah are seed rows on
@@ -109,11 +111,18 @@ class _BanksScreenState extends ConsumerState<BanksScreen> {
         child: Wrap(
           children: [
             ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('View info'),
+              leading: const Icon(Icons.receipt_long),
+              title: const Text('View ledger'),
+              subtitle: const Text(
+                  'Statement of every transaction through this account'),
               onTap: () {
                 Navigator.pop(sheetCtx);
-                _showBankInfo(context, b);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BankLedgerScreen(bank: b),
+                  ),
+                );
               },
             ),
             if (!b.archived)
@@ -196,53 +205,11 @@ class _BanksScreenState extends ConsumerState<BanksScreen> {
     }
   }
 
-  void _showBankInfo(BuildContext context, Bank b) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(b.name),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (b.accountNo != null) _kv('Account no.', b.accountNo!),
-              _kv('Archived', b.archived ? 'Yes' : 'No'),
-              _kv('Created', fmtDateTime(b.createdAt)),
-              if (b.archivedAt != null)
-                _kv('Archived at', fmtDateTime(b.archivedAt!)),
-              const SizedBox(height: 4),
-              Text('Account ID: ${b.id}',
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-                width: 110,
-                child: Text(k,
-                    style: const TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text(v)),
-          ],
-        ),
-      );
 
   void _showBankForm(BuildContext context, WidgetRef ref, {Bank? existing}) {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final acctCtrl = TextEditingController(text: existing?.accountNo ?? '');
+    final openingCtrl = TextEditingController();
 
     showModalBottomSheet<void>(
       context: context,
@@ -281,6 +248,20 @@ class _BanksScreenState extends ConsumerState<BanksScreen> {
                 decoration: const InputDecoration(
                     labelText: 'Account / wallet number (optional)'),
               ),
+              if (existing == null) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: openingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Opening balance (optional)',
+                    prefixText: 'Rs ',
+                    helperText:
+                        'Posts Dr Bank / Cr Owner\'s Equity so the books stay balanced',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
+              ],
               const SizedBox(height: 20),
               FilledButton(
                 onPressed: () async {
@@ -288,10 +269,20 @@ class _BanksScreenState extends ConsumerState<BanksScreen> {
                   if (name.isEmpty) return;
                   final repo = await ref.read(entityRepoProvider.future);
                   if (existing == null) {
-                    await repo.createBank(
+                    final created = await repo.createBank(
                       name: name,
                       accountNo: acctCtrl.text,
                     );
+                    final opening = double.tryParse(openingCtrl.text.trim()) ?? 0;
+                    if (opening > 0) {
+                      final ledger =
+                          await ref.read(ledgerRepoProvider.future);
+                      await ledger.postOpeningBalance(
+                        bankAccount: Account(
+                            created.id, created.name, AccountType.asset),
+                        amount: opening,
+                      );
+                    }
                   } else {
                     await repo.updateBankFields(
                       existing.id,

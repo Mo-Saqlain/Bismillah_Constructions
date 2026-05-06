@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'aging_analysis_screen.dart';
 import 'balance_sheet_screen.dart';
-import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
 import 'supplier_ledger_picker_screen.dart';
 import 'wage_register_screen.dart';
+import 'bank_ledger_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -38,14 +38,6 @@ class ReportsScreen extends StatelessWidget {
                     builder: (_) => const BalanceSheetScreen())),
           ),
           _ReportTile(
-            icon: Icons.swap_vert,
-            title: 'Cash Flow',
-            subtitle: 'Monthly Δ-cash across all wallets (12-month rolling)',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CashFlowScreen())),
-          ),
-          _ReportTile(
             icon: Icons.assessment,
             title: 'Budget vs Actual',
             subtitle: 'Project budget vs actual spend, by category',
@@ -72,6 +64,16 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const SupplierLedgerPickerScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.account_balance_wallet,
+            title: 'Bank / Wallet Ledger',
+            subtitle:
+                'Statement of every transaction through a specific bank or wallet',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const BankLedgerPickerScreen())),
           ),
           _ReportTile(
             icon: Icons.foundation,

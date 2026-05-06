@@ -132,14 +132,6 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('View info'),
-              onTap: () {
-                Navigator.pop(sheetCtx);
-                _showProjectInfo(context, project);
-              },
-            ),
             if (!project.archived)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
@@ -202,58 +194,6 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     );
   }
 
-  void _showProjectInfo(BuildContext context, project) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(project.name),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _kv('Model', project.model.label),
-              _kv('Status', project.status.label),
-              _kv('Archived', project.archived ? 'Yes' : 'No'),
-              if (project.clientName != null)
-                _kv('Client', project.clientName!),
-              if (project.siteAddress != null)
-                _kv('Site', project.siteAddress!),
-              if (project.budget != null)
-                _kv('Budget', fmtMoney(project.budget!)),
-              if (project.projectManager != null)
-                _kv('Manager', project.projectManager!),
-              if (project.serviceFeePercent != null)
-                _kv('Service Fee',
-                    '${project.serviceFeePercent!.toStringAsFixed(2)} %'),
-              _kv('Created', fmtDateTime(project.createdAt)),
-              if (project.archivedAt != null)
-                _kv('Archived at', fmtDateTime(project.archivedAt!)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-                width: 110,
-                child: Text(k,
-                    style: const TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text(v)),
-          ],
-        ),
-      );
 }
 
 void _showProjectForm(BuildContext context, WidgetRef ref) {

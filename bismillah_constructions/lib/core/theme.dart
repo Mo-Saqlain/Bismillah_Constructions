@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 ThemeData buildTheme({Brightness brightness = Brightness.light}) {
   final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF1B5E20),
+    // Material Blue 800 — strong, professional, readable on white & dark.
+    seedColor: const Color(0xFF1565C0),
     brightness: brightness,
   );
   return ThemeData(
