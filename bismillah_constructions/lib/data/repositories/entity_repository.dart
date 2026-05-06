@@ -8,6 +8,7 @@ import '../models/bank.dart';
 import '../models/change_log.dart';
 import '../models/counter_entity.dart';
 import '../models/material_item.dart';
+import '../models/material_type_def.dart';
 import '../models/party.dart';
 import '../models/project.dart';
 
@@ -550,7 +551,7 @@ class EntityRepository {
     required String projectId,
     required String supplierId,
     String? transactionId,
-    required MaterialType materialType,
+    required String materialType,
     required double price,
   }) async {
     final item = MaterialItem(
@@ -568,6 +569,71 @@ class EntityRepository {
     );
     await _db.insert('material_inventory', item.toMap());
     return item;
+  }
+
+  // ---- Material Types (user-defined categories) ----
+
+  /// All material categories, built-ins first then alphabetical for the rest.
+  /// `sort_order` lets the seeded built-ins (Brick, Cement, Sarya, Finishing,
+  /// Other) keep their original order; user rows fall back to insertion time.
+  Future<List<MaterialTypeDef>> materialTypes() async {
+    final rows = await _db.query(
+      'material_types',
+      orderBy: 'is_builtin DESC, sort_order ASC, name ASC',
+    );
+    return rows.map(MaterialTypeDef.fromMap).toList();
+  }
+
+  /// Adds a new user-defined material type. Trims whitespace and rejects
+  /// duplicates (case-insensitive) to keep the dropdown clean. Returns the
+  /// row, or `null` if [name] was empty.
+  ///
+  /// Throws if a row with the same name already exists.
+  Future<MaterialTypeDef?> addMaterialType(String name) async {
+    final clean = name.trim();
+    if (clean.isEmpty) return null;
+
+    final existing = await _db.query(
+      'material_types',
+      where: 'LOWER(name) = LOWER(?)',
+      whereArgs: [clean],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      throw StateError('A material type named "$clean" already exists.');
+    }
+
+    final row = MaterialTypeDef(
+      id: _uuid.v4(),
+      name: clean,
+      isBuiltin: false,
+      // Pushes user-added rows after the built-ins and any earlier customs.
+      sortOrder: 1000 + DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      createdAt: DateTime.now().toUtc(),
+    );
+    await _db.insert('material_types', row.toMap());
+    return row;
+  }
+
+  /// Renames a material type. Built-ins can be renamed (display label changes)
+  /// but not deleted, so historical inventory rows always resolve to a label.
+  Future<void> renameMaterialType(String id, String newName) async {
+    final clean = newName.trim();
+    if (clean.isEmpty) return;
+    await _db.update('material_types', {'name': clean},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Deletes a user-defined material type. Built-ins are protected — calling
+  /// this on a built-in is a no-op so an accidental tap can't strip a label
+  /// out from under existing inventory rows.
+  Future<bool> deleteMaterialType(String id) async {
+    final n = await _db.delete(
+      'material_types',
+      where: 'id = ? AND is_builtin = 0',
+      whereArgs: [id],
+    );
+    return n > 0;
   }
 
   Future<List<MaterialItem>> materialInventory({String? projectId}) async {

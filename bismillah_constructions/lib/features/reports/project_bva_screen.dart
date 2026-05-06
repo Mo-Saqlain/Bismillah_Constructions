@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../core/theme.dart';
 import '../../data/models/project.dart';
@@ -49,7 +48,7 @@ class ProjectBvaScreen extends ConsumerWidget {
 
           final categories = <(String, double)>[
             for (final e in bva.materialByType.entries)
-              ('Material · ${e.key.label}', e.value),
+              ('Material · ${e.key}', e.value),
             if (bva.otherMaterial > 0)
               ('Material · Other', bva.otherMaterial),
             ('Labour', bva.labour),
@@ -164,7 +163,7 @@ class ProjectBvaScreen extends ConsumerWidget {
       rows: [
         for (final e in bva.materialByType.entries)
           [
-            'Material · ${e.key.label}',
+            'Material · ${e.key}',
             e.value.toStringAsFixed(2),
             spend == 0 ? '0' : (e.value / spend * 100).toStringAsFixed(1),
           ],

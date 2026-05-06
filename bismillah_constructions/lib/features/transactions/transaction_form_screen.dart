@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart' hide MaterialType;
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -7,6 +7,7 @@ import '../../data/models/party.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../settings/material_types_screen.dart';
 
 class TransactionFormScreen extends ConsumerStatefulWidget {
   const TransactionFormScreen({super.key, required this.kind});
@@ -27,7 +28,9 @@ class _TransactionFormScreenState
   String? _supplierId;
   Account? _cashLike;
   Account? _transferTo;
-  MaterialType _materialType = MaterialType.cement;
+  /// User-managed material category, resolved from the `materialTypesProvider`
+  /// list once it loads. The dropdown defaults to the first available type.
+  String? _materialType;
   bool _saving = false;
 
   TxnKind get _k => widget.kind;
@@ -94,6 +97,11 @@ class _TransactionFormScreenState
       String txnId;
       switch (_k) {
         case TxnKind.materialBuy:
+          // Defensive: the dropdown's validator should have caught this, but
+          // belt-and-suspenders prevents a NPE crash on edge race conditions.
+          if (_materialType == null) {
+            throw StateError('Pick a material type first.');
+          }
           txnId = await ledger.postMaterialBuy(
               amount: amount,
               projectId: _projectId!,
@@ -104,7 +112,7 @@ class _TransactionFormScreenState
             projectId: _projectId!,
             supplierId: _supplierId!,
             transactionId: txnId,
-            materialType: _materialType,
+            materialType: _materialType!,
             price: amount,
           );
         case TxnKind.labourPayment:
@@ -187,16 +195,9 @@ class _TransactionFormScreenState
               const SizedBox(height: 16),
 
               if (_isMaterialBuy) ...[
-                DropdownButtonFormField<MaterialType>(
-                  initialValue: _materialType,
-                  decoration:
-                      const InputDecoration(labelText: 'Material Type'),
-                  items: MaterialType.values
-                      .map((t) => DropdownMenuItem(
-                          value: t, child: Text(t.label)))
-                      .toList(),
-                  onChanged: (v) =>
-                      setState(() => _materialType = v ?? _materialType),
+                _MaterialTypePicker(
+                  current: _materialType,
+                  onChanged: (v) => setState(() => _materialType = v),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -495,3 +496,101 @@ class _OfflineNote extends ConsumerWidget {
     );
   }
 }
+
+/// Dropdown of every category in `material_types`, plus a "+ Manage…" trailing
+/// button that jumps straight to the editor so the user can add a new type
+/// without abandoning the in-progress purchase form.
+///
+/// The current selection is reported back through [onChanged]; when the
+/// dropdown first loads with no selection, it auto-picks the first row so the
+/// form is always submittable without an extra tap.
+class _MaterialTypePicker extends ConsumerWidget {
+  const _MaterialTypePicker({required this.current, required this.onChanged});
+
+  final String? current;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final typesAsync = ref.watch(materialTypesProvider);
+    return typesAsync.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (e, _) => Text('Could not load material types: $e'),
+      data: (types) {
+        if (types.isEmpty) {
+          // Defensive: the migration seeds five built-ins, so this only fires
+          // if a user manually deletes everything (which the repo prevents
+          // for built-ins, but we keep a graceful path anyway).
+          return _ManageRow(empty: true);
+        }
+        // Auto-select the first option once the list is available so the form
+        // doesn't ship with an unselected dropdown.
+        final selected =
+            types.any((t) => t.name == current) ? current : types.first.name;
+        if (selected != current) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            onChanged(selected);
+          });
+        }
+        return Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: selected,
+                decoration:
+                    const InputDecoration(labelText: 'Material Type *'),
+                items: types
+                    .map((t) => DropdownMenuItem(
+                        value: t.name, child: Text(t.name)))
+                    .toList(),
+                onChanged: onChanged,
+                validator: (v) =>
+                    v == null || v.isEmpty ? 'Pick a material type' : null,
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filledTonal(
+              tooltip: 'Manage material types',
+              icon: const Icon(Icons.tune),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const MaterialTypesScreen()),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ManageRow extends StatelessWidget {
+  const _ManageRow({this.empty = false});
+  final bool empty;
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            empty
+                ? 'No material types defined. Add one to continue.'
+                : 'Manage your material categories.',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton.icon(
+          icon: const Icon(Icons.add),
+          label: const Text('Add type'),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MaterialTypesScreen()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+

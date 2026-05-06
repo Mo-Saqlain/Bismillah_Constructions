@@ -118,22 +118,9 @@ extension CounterEntityTypeX on CounterEntityType {
           orElse: () => CounterEntityType.receivable);
 }
 
-enum MaterialType { brick, cement, sarya, finishing, other }
-
-extension MaterialTypeX on MaterialType {
-  String get label => switch (this) {
-        MaterialType.brick => 'Brick',
-        MaterialType.cement => 'Cement',
-        MaterialType.sarya => 'Sarya (Steel)',
-        MaterialType.finishing => 'Finishing',
-        MaterialType.other => 'Other',
-      };
-  String get db => name;
-
-  static MaterialType fromDb(String s) =>
-      MaterialType.values.firstWhere((v) => v.name == s,
-          orElse: () => MaterialType.cement);
-}
+/// Material categories are now user-defined (see the `material_types` table
+/// and Settings → Material Types). The enum was removed in v7 — the column
+/// stores a free-form string keyed off `material_types.name`.
 
 /// Legacy unit retained for schema compatibility. New entries record `lump`
 /// because the UI only collects a price (quantity goes in the memo).

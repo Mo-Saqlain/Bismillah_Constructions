@@ -208,31 +208,50 @@ class _C extends StatelessWidget {
 
 /// Builds the standard PDF + CSV action buttons for an AppBar. The screen
 /// passes async callbacks; this widget just renders the icons.
+///
+/// Buttons stay tappable even when [enabled] is false — pressing then surfaces
+/// a snackbar so the user gets feedback instead of a silent dead button. The
+/// filled-tonal style keeps them visible against the primary AppBar
+/// background (the previous plain IconButton rendered low-contrast white on
+/// blue and looked inert).
 class LedgerExportActions extends StatelessWidget {
   const LedgerExportActions({
     super.key,
     required this.onExportPdf,
     required this.onExportCsv,
     this.enabled = true,
+    this.disabledMessage = 'Nothing to export yet.',
   });
 
   final Future<void> Function() onExportPdf;
   final Future<void> Function() onExportCsv;
   final bool enabled;
+  final String disabledMessage;
+
+  void _notify(BuildContext context) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(disabledMessage)),
+      );
 
   @override
   Widget build(BuildContext context) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      IconButton(
-        tooltip: 'Export PDF',
-        icon: const Icon(Icons.picture_as_pdf),
-        onPressed: enabled ? onExportPdf : null,
-      ),
-      IconButton(
-        tooltip: 'Export CSV',
-        icon: const Icon(Icons.file_download),
-        onPressed: enabled ? onExportCsv : null,
-      ),
-    ]);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: IconButton.filledTonal(
+            tooltip: 'Export PDF',
+            icon: const Icon(Icons.picture_as_pdf),
+            onPressed: enabled ? onExportPdf : () => _notify(context),
+          ),
+        ),
+        IconButton.filledTonal(
+          tooltip: 'Export CSV',
+          icon: const Icon(Icons.file_download),
+          onPressed: enabled ? onExportCsv : () => _notify(context),
+        ),
+      ]),
+    );
   }
 }

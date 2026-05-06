@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/constants.dart';
 import '../models/change_log.dart';
 import '../models/journal_entry.dart';
+import '../models/material_item.dart' show resolveMaterialLabel;
 
 const _uuid = Uuid();
 
@@ -754,10 +755,10 @@ class LedgerRepository {
       'GROUP BY material_type',
       [projectId, MaterialTxnType.purchase.db],
     );
-    final byMaterial = <MaterialType, double>{};
+    final byMaterial = <String, double>{};
     for (final r in matRows) {
-      final t = MaterialTypeX.fromDb(r['material_type'] as String);
-      byMaterial[t] = (r['s'] as num).toDouble();
+      final label = resolveMaterialLabel(r['material_type'] as String);
+      byMaterial[label] = (byMaterial[label] ?? 0) + (r['s'] as num).toDouble();
     }
     // Reconcile rounding: any material posted via journals that isn't in
     // material_inventory ends up under "other material".
@@ -773,9 +774,9 @@ class LedgerRepository {
 
   // -------------------- Price Trend --------------------
 
-  /// Time-series of unit rates per [MaterialType] from `material_inventory`,
+  /// Time-series of unit rates per material label from `material_inventory`,
   /// for the last `monthsBack` months. Each entry is `(date, rate)`.
-  Future<Map<MaterialType, List<PricePoint>>> priceTrend(
+  Future<Map<String, List<PricePoint>>> priceTrend(
       {int monthsBack = 12}) async {
     final cutoff = DateTime.now()
         .toUtc()
@@ -786,11 +787,11 @@ class LedgerRepository {
       'ORDER BY created_at ASC',
       [MaterialTxnType.purchase.db, cutoff.toIso8601String()],
     );
-    final out = <MaterialType, List<PricePoint>>{};
+    final out = <String, List<PricePoint>>{};
     for (final r in rows) {
-      final t = MaterialTypeX.fromDb(r['material_type'] as String);
+      final label = resolveMaterialLabel(r['material_type'] as String);
       out
-          .putIfAbsent(t, () => [])
+          .putIfAbsent(label, () => [])
           .add(PricePoint(
             date: DateTime.parse(r['created_at'] as String),
             rate: (r['rate'] as num).toDouble(),
@@ -861,7 +862,10 @@ class WageRegisterLine {
 }
 
 class ProjectBva {
-  final Map<MaterialType, double> materialByType;
+  /// Keyed by the human-readable material label (e.g. "Cement"). User-defined
+  /// types appear here verbatim; legacy enum-name rows are normalized via
+  /// [resolveMaterialLabel].
+  final Map<String, double> materialByType;
   final double otherMaterial;
   final double labour;
   const ProjectBva({

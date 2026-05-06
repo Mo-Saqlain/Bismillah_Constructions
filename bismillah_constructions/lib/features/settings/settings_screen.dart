@@ -12,6 +12,7 @@ import '../../providers/providers.dart';
 import '../parties/banks_screen.dart';
 import 'backups_list_screen.dart';
 import 'change_log_screen.dart';
+import 'material_types_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -236,6 +237,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ref.read(themeModeProvider.notifier).setMode(v),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _SectionTitle('Material Types'),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.category),
+              title: const Text('Manage material types'),
+              subtitle: const Text(
+                  'Add your own categories (e.g. Sand, Tiles, Paint) — they appear in the Buy Material dropdown'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const MaterialTypesScreen()),
+              ),
             ),
           ),
           const SizedBox(height: 12),

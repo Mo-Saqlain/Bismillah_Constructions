@@ -10,6 +10,7 @@ import '../data/models/bank.dart';
 import '../data/models/change_log.dart';
 import '../data/models/counter_entity.dart';
 import '../data/models/journal_entry.dart';
+import '../data/models/material_type_def.dart';
 import '../data/models/party.dart';
 import '../data/models/project.dart';
 import '../data/repositories/entity_repository.dart';
@@ -171,6 +172,16 @@ final counterEntitiesProvider =
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);
   return repo.counterEntities();
+});
+
+/// User-defined + built-in material categories. Bumping
+/// [ledgerVersionProvider] after add/delete refreshes the dropdown
+/// everywhere that watches this list.
+final materialTypesProvider =
+    FutureProvider<List<MaterialTypeDef>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.materialTypes();
 });
 
 // ---- Ledger reads ----

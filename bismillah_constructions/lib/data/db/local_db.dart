@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 6);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 7);
 
   Database? _db;
   String? _dbPath;
@@ -41,7 +41,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -175,6 +175,17 @@ class LocalDb {
       )
     ''');
 
+    await db.execute('''
+      CREATE TABLE material_types (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await _seedMaterialTypes(db);
+
     await db.execute(
       'CREATE INDEX idx_je_txn ON journal_entries(transaction_id)',
     );
@@ -304,6 +315,22 @@ class LocalDb {
       }
     }
 
+    if (oldVersion < 7) {
+      // v7: user-defined material types. The five legacy enum values are
+      // seeded as built-ins so existing material_inventory rows keep their
+      // labels and the dropdown isn't empty for upgraded installs.
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS material_types (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          is_builtin INTEGER NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        )
+      ''');
+      await _seedMaterialTypes(db);
+    }
+
     if (oldVersion < 3) {
       // v3: soft delete, archive, change log, settings, service fee
       await db.execute(
@@ -340,6 +367,34 @@ class LocalDb {
           'CREATE INDEX IF NOT EXISTS idx_je_deleted ON journal_entries(is_deleted)');
       await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_cl_entity ON change_log(entity_type, entity_id)');
+    }
+  }
+
+  /// Seeds the five legacy [MaterialType] enum values as built-in rows so
+  /// fresh installs have a working dropdown out of the box. Uses INSERT OR
+  /// IGNORE on the unique `name` so re-running the seed (e.g. after a
+  /// downgrade/upgrade) is a no-op.
+  Future<void> _seedMaterialTypes(Database db) async {
+    const seeds = <Map<String, Object>>[
+      {'id': 'mt_brick', 'name': 'Brick', 'sort_order': 0},
+      {'id': 'mt_cement', 'name': 'Cement', 'sort_order': 1},
+      {'id': 'mt_sarya', 'name': 'Sarya (Steel)', 'sort_order': 2},
+      {'id': 'mt_finishing', 'name': 'Finishing', 'sort_order': 3},
+      {'id': 'mt_other', 'name': 'Other', 'sort_order': 4},
+    ];
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final s in seeds) {
+      await db.insert(
+        'material_types',
+        {
+          'id': s['id'],
+          'name': s['name'],
+          'is_builtin': 1,
+          'sort_order': s['sort_order'],
+          'created_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
     }
   }
 }

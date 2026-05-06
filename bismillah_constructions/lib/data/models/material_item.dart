@@ -1,11 +1,18 @@
 import '../../core/constants.dart';
 
+/// One row of the material inventory ledger.
+///
+/// `materialType` was originally a fixed enum (brick/cement/sarya/finishing/
+/// other). It is now a free-form String so users can define their own
+/// categories from Settings → Material Types. Legacy rows that stored the
+/// enum's `name` (lowercase) are normalized into a friendly label by
+/// [resolveMaterialLabel].
 class MaterialItem {
   final String id;
   final String projectId;
   final String supplierId;
   final String? transactionId;
-  final MaterialType materialType;
+  final String materialType;
   final MaterialUnit unit;
   final double quantity;
   final double rate;
@@ -32,7 +39,7 @@ class MaterialItem {
         'project_id': projectId,
         'supplier_id': supplierId,
         'transaction_id': transactionId,
-        'material_type': materialType.db,
+        'material_type': materialType,
         'unit': unit.db,
         'quantity': quantity,
         'rate': rate,
@@ -46,7 +53,7 @@ class MaterialItem {
         projectId: m['project_id'] as String,
         supplierId: m['supplier_id'] as String,
         transactionId: m['transaction_id'] as String?,
-        materialType: MaterialTypeX.fromDb(m['material_type'] as String),
+        materialType: resolveMaterialLabel(m['material_type'] as String),
         unit: MaterialUnitX.fromDb(m['unit'] as String),
         quantity: (m['quantity'] as num).toDouble(),
         rate: (m['rate'] as num).toDouble(),
@@ -54,12 +61,24 @@ class MaterialItem {
         txnType: MaterialTxnTypeX.fromDb(m['txn_type'] as String),
         createdAt: DateTime.parse(m['created_at'] as String),
       );
+}
 
-  /// Brick pricing: total = (quantity / 1000) * rate.
-  /// All other materials: total = quantity * rate.
-  static double computeTotal(
-      MaterialType type, double quantity, double rate) {
-    if (type == MaterialType.brick) return (quantity / 1000) * rate;
-    return quantity * rate;
+/// Maps legacy lowercase enum names ("brick", "cement", ...) to the
+/// human-readable labels now stored in `material_types.name`. Anything else
+/// is returned verbatim — that is the user-defined label.
+String resolveMaterialLabel(String stored) {
+  switch (stored) {
+    case 'brick':
+      return 'Brick';
+    case 'cement':
+      return 'Cement';
+    case 'sarya':
+      return 'Sarya (Steel)';
+    case 'finishing':
+      return 'Finishing';
+    case 'other':
+      return 'Other';
+    default:
+      return stored;
   }
 }
