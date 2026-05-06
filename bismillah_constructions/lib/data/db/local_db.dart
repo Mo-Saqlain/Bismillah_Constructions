@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
@@ -20,6 +20,14 @@ class LocalDb {
 
   /// Absolute path of the open database — used by backup service.
   String? get dbPath => _dbPath;
+
+  /// Closes the database connection so that [open] can reopen it with new
+  /// content — called by the auto-restore flow after copying a backup file
+  /// to [dbPath].
+  Future<void> reinitialize() async {
+    await _db?.close();
+    _db = null;
+  }
 
   Future<Database> open() async {
     if (_db != null) return _db!;

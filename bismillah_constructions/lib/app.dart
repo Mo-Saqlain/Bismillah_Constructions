@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme.dart';
-import 'features/home/home_screen.dart';
+import 'features/common/restore_gateway.dart';
 import 'providers/providers.dart';
 
 class BismillahApp extends ConsumerWidget {
@@ -25,7 +25,7 @@ class BismillahApp extends ConsumerWidget {
       themeMode: mode,
       theme: buildTheme(brightness: Brightness.light),
       darkTheme: buildTheme(brightness: Brightness.dark),
-      home: const HomeScreen(),
+      home: const RestoreGateway(),
     );
   }
 }
