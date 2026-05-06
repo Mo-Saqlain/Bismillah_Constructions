@@ -61,7 +61,7 @@ class LedgerView extends StatelessWidget {
   final double totalValue;
 
   /// When true, the total is rendered with a +/- prefix and tinted
-  /// green/red. Use for ledgers where the sign of the total is meaningful
+  /// blue/red. Use for ledgers where the sign of the total is meaningful
   /// (project net debit position, bank balance). Suppliers should leave
   /// this false (their payables are always positive).
   final bool signedTotal;
@@ -206,14 +206,13 @@ class _C extends StatelessWidget {
       );
 }
 
-/// Builds the standard PDF + CSV action buttons for an AppBar. The screen
-/// passes async callbacks; this widget just renders the icons.
+/// PDF + CSV action buttons for an AppBar.
 ///
-/// Buttons stay tappable even when [enabled] is false — pressing then surfaces
-/// a snackbar so the user gets feedback instead of a silent dead button. The
-/// filled-tonal style keeps them visible against the primary AppBar
-/// background (the previous plain IconButton rendered low-contrast white on
-/// blue and looked inert).
+/// Pressing always does something — when [enabled] is false the button
+/// surfaces a snackbar instead of going dead, so the user always sees
+/// feedback. The icons render with the AppBar's `onPrimary` color (white on
+/// the primary blue) and are slightly upsized so they "pop" without the
+/// filled-tonal pill that previously wrapped them.
 class LedgerExportActions extends StatelessWidget {
   const LedgerExportActions({
     super.key,
@@ -235,23 +234,22 @@ class LedgerExportActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Padding(
-          padding: const EdgeInsets.only(right: 6),
-          child: IconButton.filledTonal(
-            tooltip: 'Export PDF',
-            icon: const Icon(Icons.picture_as_pdf),
-            onPressed: enabled ? onExportPdf : () => _notify(context),
-          ),
-        ),
-        IconButton.filledTonal(
-          tooltip: 'Export CSV',
-          icon: const Icon(Icons.file_download),
-          onPressed: enabled ? onExportCsv : () => _notify(context),
-        ),
-      ]),
-    );
+    final fg = Theme.of(context).appBarTheme.foregroundColor ??
+        Theme.of(context).colorScheme.onPrimary;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(
+        tooltip: 'Export PDF',
+        icon: const Icon(Icons.picture_as_pdf, size: 26),
+        color: fg,
+        onPressed: enabled ? onExportPdf : () => _notify(context),
+      ),
+      IconButton(
+        tooltip: 'Export CSV',
+        icon: const Icon(Icons.file_download, size: 26),
+        color: fg,
+        onPressed: enabled ? onExportCsv : () => _notify(context),
+      ),
+      const SizedBox(width: 4),
+    ]);
   }
 }

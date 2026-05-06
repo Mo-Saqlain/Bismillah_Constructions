@@ -36,18 +36,24 @@ ThemeData buildTheme({Brightness brightness = Brightness.light}) {
 }
 
 /// High-contrast indicator colors per spec section 4.
+///
+/// The palette is intentionally green-free — the app standardised on blue for
+/// every "good / positive" affordance. Negatives stay red because that's the
+/// universal accounting convention and the only non-blue accent we keep.
 class BalanceColors {
+  /// Material Blue 700 (light) / Blue 300 (dark). Replaces the green that
+  /// used to mean "positive balance".
   static Color positive(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF66BB6A)
-          : const Color(0xFF1B5E20);
+          ? const Color(0xFF64B5F6)
+          : const Color(0xFF1976D2);
 
   static Color negative(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
           ? const Color(0xFFEF5350)
           : const Color(0xFFC62828);
 
-  /// Picks green or red based on whether `value` is non-negative.
+  /// Picks blue (positive) or red (negative) based on the sign.
   static Color signed(BuildContext context, num value) =>
       value >= 0 ? positive(context) : negative(context);
 }

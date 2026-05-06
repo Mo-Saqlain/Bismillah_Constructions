@@ -183,9 +183,9 @@ class BalanceSheetScreen extends ConsumerWidget {
       );
 }
 
-/// Banner that adapts to dark mode — `Colors.green.shade50` was nearly
-/// invisible on dark backgrounds, so we now derive both the background and
-/// foreground from the [ColorScheme] so the message stays legible everywhere.
+/// Banner that adapts to dark mode. The "ok" state used to be green; the app
+/// now uses blue everywhere so positive feedback inherits the primary palette
+/// instead. Negative state stays red (universal accounting convention).
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
     required this.ok,
@@ -199,13 +199,13 @@ class _StatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = ok
-        ? (isDark ? Colors.green.shade900 : Colors.green.shade50)
+        ? (isDark ? Colors.blue.shade900 : Colors.blue.shade50)
         : (isDark ? Colors.red.shade900 : Colors.red.shade50);
     final fg = ok
-        ? (isDark ? Colors.green.shade100 : Colors.green.shade900)
+        ? (isDark ? Colors.blue.shade100 : Colors.blue.shade900)
         : (isDark ? Colors.red.shade100 : Colors.red.shade900);
     final border = ok
-        ? (isDark ? Colors.green.shade400 : Colors.green.shade300)
+        ? (isDark ? Colors.blue.shade400 : Colors.blue.shade300)
         : (isDark ? Colors.red.shade400 : Colors.red.shade300);
     return Container(
       padding: const EdgeInsets.all(12),

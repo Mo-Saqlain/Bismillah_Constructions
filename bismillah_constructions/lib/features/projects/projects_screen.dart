@@ -69,7 +69,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                     backgroundColor: p.archived
                         ? Colors.brown.shade100
                         : (p.status == ProjectStatus.active
-                            ? Colors.green.shade100
+                            ? Colors.blue.shade100
                             : Colors.grey.shade300),
                     child: Icon(
                       p.archived
@@ -80,7 +80,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                       color: p.archived
                           ? Colors.brown.shade800
                           : (p.status == ProjectStatus.active
-                              ? Colors.green.shade800
+                              ? Colors.blue.shade800
                               : Colors.grey.shade700),
                     ),
                   ),

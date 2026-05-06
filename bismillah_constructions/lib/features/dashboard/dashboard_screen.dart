@@ -8,7 +8,6 @@ import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../reports/bank_ledger_screen.dart';
-import '../settings/settings_screen.dart';
 import '../transactions/transaction_history_screen.dart';
 import '../transactions/transaction_picker_screen.dart';
 
@@ -31,13 +30,7 @@ class DashboardScreen extends ConsumerWidget {
         title: const Text('Bismillah'),
         actions: [
           _SyncIndicator(status: sync),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
+          const SizedBox(width: 8),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(

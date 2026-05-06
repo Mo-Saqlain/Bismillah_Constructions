@@ -90,7 +90,7 @@ class _IncomeStatementScreenState
                           _row(context, 'Net Profit / (Loss)', net,
                               bold: true,
                               color: net >= 0
-                                  ? Colors.green.shade700
+                                  ? Colors.blue.shade700
                                   : Colors.red.shade700),
                         ],
                       ),
