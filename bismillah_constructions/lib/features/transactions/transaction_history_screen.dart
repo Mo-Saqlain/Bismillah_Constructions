@@ -7,6 +7,7 @@ import '../../core/theme.dart';
 import '../../data/models/journal_entry.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../common/date_range_bar.dart';
 
 class TransactionHistoryScreen extends ConsumerStatefulWidget {
   const TransactionHistoryScreen({super.key});
@@ -19,6 +20,24 @@ class TransactionHistoryScreen extends ConsumerStatefulWidget {
 class _TransactionHistoryScreenState
     extends ConsumerState<TransactionHistoryScreen> {
   bool _showDeleted = false;
+  DateTime? _from;
+  DateTime? _to;
+
+  /// True when [r.createdAt] (in local time) falls inside the selected
+  /// `[_from, _to]` window. Both bounds are optional and inclusive.
+  bool _inWindow(JournalEntry r) {
+    final created = r.createdAt.toLocal();
+    if (_from != null) {
+      final start = DateTime(_from!.year, _from!.month, _from!.day);
+      if (created.isBefore(start)) return false;
+    }
+    if (_to != null) {
+      final endExclusive = DateTime(_to!.year, _to!.month, _to!.day)
+          .add(const Duration(days: 1));
+      if (!created.isBefore(endExclusive)) return false;
+    }
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,24 +62,51 @@ class _TransactionHistoryScreenState
           ),
         ],
       ),
-      body: AsyncView<List<JournalEntry>>(
-        value: entries,
-        data: (rows) {
-          if (rows.isEmpty) {
-            return const Center(child: Text('No transactions yet.'));
-          }
-          final pairs = <String, List<JournalEntry>>{};
-          for (final r in rows) {
-            (pairs[r.transactionId] ??= []).add(r);
-          }
-          final txnIds = pairs.keys.toList();
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: DateRangeBar(
+              from: _from,
+              to: _to,
+              onChanged: (f, t) => setState(() {
+                _from = f;
+                _to = t;
+              }),
+            ),
+          ),
+          Expanded(
+            child: AsyncView<List<JournalEntry>>(
+              value: entries,
+              data: (rows) {
+                final filtered = rows.where(_inWindow).toList();
+                if (filtered.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        rows.isEmpty
+                            ? 'No transactions yet.'
+                            : 'No transactions in ${formatPeriod(_from, _to)}.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+                // Group both legs of every transaction together so the card
+                // can render the Dr/Cr pair on one tile.
+                final pairs = <String, List<JournalEntry>>{};
+                for (final r in filtered) {
+                  (pairs[r.transactionId] ??= []).add(r);
+                }
+                final txnIds = pairs.keys.toList();
 
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: txnIds.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final pair = pairs[txnIds[i]]!;
+                return ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: txnIds.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final pair = pairs[txnIds[i]]!;
               if (pair.length != 2) return const SizedBox.shrink();
               final dr = pair.firstWhere((e) => e.debit > 0);
               final cr = pair.firstWhere((e) => e.credit > 0);
@@ -158,6 +204,9 @@ class _TransactionHistoryScreenState
             },
           );
         },
+      ),
+            ),
+        ],
       ),
     );
   }

@@ -5,20 +5,18 @@ import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../core/theme.dart';
 import '../../data/models/project.dart';
+import '../../data/repositories/entity_repository.dart';
 import '../../data/repositories/ledger_repository.dart';
 import '../../providers/providers.dart';
 
-/// Project archive workflow with reconciliation check.
+/// Project archive workflow with strict reconciliation.
 ///
-/// With-Material projects: blocks archive while supplier payables remain
-/// outstanding (`customer_inflow == supplier_paid + supplier_payables`).
-///
-/// Labour-Rate projects: shows the close-out math (customer paid vs.
-/// money spent on their behalf, the contractor's service fee, and the
-/// resulting refund-to-customer or amount-owed-by-customer). On archive
-/// the service fee is posted automatically as a non-cash reclassification
-/// (Dr Project Revenue / Cr Service Fee Income), so the books separate
-/// "money handled for the customer" from "earnings".
+/// Both project models share the same gate now: the project's ledger net
+/// (Material + Labour debits − Project Revenue − Service Fee Income) and
+/// its outstanding Supplier Payables both have to be zero before
+/// archive. The screen surfaces what's still off and offers the
+/// service-fee reclassification button for Labour-Rate projects so the
+/// user can do it in one tap before settling the cash side.
 class ProjectReconciliationScreen extends ConsumerStatefulWidget {
   const ProjectReconciliationScreen({super.key, required this.project});
   final Project project;
@@ -33,8 +31,10 @@ class _ProjectReconciliationScreenState
   ProjectReconciliation? _rec;
   double? _outflow;
   LabourRateClose? _close;
+  ({double supplierPayables, double ledgerNet, double serviceFeeBooked})?
+      _gate;
   bool _loading = true;
-  bool _archiving = false;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -46,6 +46,7 @@ class _ProjectReconciliationScreenState
     final repo = await ref.read(ledgerRepoProvider.future);
     final rec = await repo.reconcileProject(widget.project.id);
     final outflow = await repo.projectOutflow(widget.project.id);
+    final gate = await repo.projectArchiveStatus(widget.project.id);
     LabourRateClose? close;
     if (widget.project.model == ProjectModel.labourRate) {
       close = await repo.labourRateCloseSummary(
@@ -58,44 +59,33 @@ class _ProjectReconciliationScreenState
       _rec = rec;
       _outflow = outflow;
       _close = close;
+      _gate = gate;
       _loading = false;
     });
   }
 
-  /// Archives the project. For Labour-Rate projects with a non-zero
-  /// service fee, also posts the fee as a non-cash reclassification
-  /// before archiving so the close-out is recorded in the ledger.
-  Future<void> _archive() async {
-    setState(() => _archiving = true);
+  /// Posts the labour-rate service fee (Dr Project Revenue / Cr Service
+  /// Fee Income) without archiving. Lets the user do this as a discrete
+  /// step so they can then settle the cash refund or collection
+  /// separately and only archive once everything nets to zero.
+  Future<void> _postServiceFee() async {
+    final close = _close;
+    if (close == null || close.serviceFee <= 0) return;
+    setState(() => _busy = true);
     try {
       final ledgerRepo = await ref.read(ledgerRepoProvider.future);
-      final entityRepo = await ref.read(entityRepoProvider.future);
-
-      final close = _close;
-      if (close != null && close.serviceFee > 0) {
-        await ledgerRepo.postProjectServiceFee(
-          projectId: widget.project.id,
-          amount: close.serviceFee,
-          description:
-              'Service fee on close (${close.feePercent.toStringAsFixed(2)} %)',
-        );
-      }
-
-      await entityRepo.archiveProject(
-        widget.project.id,
-        note: close == null
-            ? 'Archived after reconciliation review'
-            : 'Archived (Labour-Rate close: fee ${fmtMoney(close.serviceFee)}, '
-                'settlement ${fmtSignedMoney(close.netToSettle)})',
+      await ledgerRepo.postProjectServiceFee(
+        projectId: widget.project.id,
+        amount: close.serviceFee,
+        description:
+            'Service fee on close (${close.feePercent.toStringAsFixed(2)} %)',
       );
       bumpLedger(ref);
-
+      await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(close != null && close.serviceFee > 0
-                ? 'Service fee posted and project archived.'
-                : 'Project archived (data preserved).')));
-        Navigator.pop(context);
+            content: Text(
+                'Service fee posted (${fmtMoney(close.serviceFee)}). Settle the remaining cash gap, then archive.')));
       }
     } catch (e) {
       if (mounted) {
@@ -103,13 +93,43 @@ class _ProjectReconciliationScreenState
             .showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     } finally {
-      if (mounted) setState(() => _archiving = false);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _archive() async {
+    setState(() => _busy = true);
+    try {
+      final entityRepo = await ref.read(entityRepoProvider.future);
+      await entityRepo.archiveProject(
+        widget.project.id,
+        note: 'Archived after reconciliation',
+      );
+      bumpLedger(ref);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Project archived (data preserved).')));
+        Navigator.pop(context);
+      }
+    } on ReconciliationException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Archive blocked — ${fmtSignedMoney(e.netLedger)} of ledger net + ${fmtSignedMoney(e.outstandingPayables)} of supplier payables still open.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _rec == null || _outflow == null) {
+    if (_loading || _rec == null || _outflow == null || _gate == null) {
       return Scaffold(
         appBar: AppBar(title: Text(widget.project.name)),
         body: const Center(child: CircularProgressIndicator()),
@@ -119,27 +139,39 @@ class _ProjectReconciliationScreenState
     final p = widget.project;
     final rec = _rec!;
     final outflow = _outflow!;
-    final balanced = rec.isBalanced;
+    final gate = _gate!;
     final isLabour = p.model == ProjectModel.labourRate;
+
+    final ledgerOk = gate.ledgerNet.abs() < 0.01;
+    final payablesOk = gate.supplierPayables.abs() < 0.01;
+    final canArchive = ledgerOk && payablesOk;
+
+    final feeAlreadyPosted = (_close?.serviceFee ?? 0) > 0 &&
+        gate.serviceFeeBooked >= (_close!.serviceFee - 0.01);
 
     return Scaffold(
       appBar: AppBar(title: Text('Reconcile · ${p.name}')),
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          _StatusBanner(balanced: balanced, payables: rec.supplierPayables),
+          _StatusBanner(
+            ok: canArchive,
+            ledgerNet: gate.ledgerNet,
+            payables: gate.supplierPayables,
+          ),
           const SizedBox(height: 8),
           _SectionTitle(title: 'Project Cashflows'),
           _Row(label: 'Received from Project', value: rec.projectInflow),
           _Row(label: 'Supplier Paid', value: rec.supplierPaid),
           _Row(
               label: 'Supplier Payables Outstanding',
-              value: rec.supplierPayables,
-              colorize: rec.supplierPayables != 0),
+              value: gate.supplierPayables,
+              colorize: !payablesOk),
+          _Row(label: 'Service Fee Booked', value: gate.serviceFeeBooked),
           _Row(
-              label: 'Net (Inflow − Costs)',
-              value: rec.savings,
-              colorize: true),
+              label: 'Project Ledger Net',
+              value: gate.ledgerNet,
+              colorize: !ledgerOk),
           const SizedBox(height: 12),
           _SectionTitle(title: 'Profit (${p.model.label})'),
           _Row(label: 'Total Project Outflow', value: outflow),
@@ -159,96 +191,95 @@ class _ProjectReconciliationScreenState
           if (!isLabour) ...[
             const SizedBox(height: 4),
             Text(
-              'With-Material model: remaining balance at archive = Business Savings.',
+              'With-Material model: archive only allowed once every cost is matched by an inflow and the supplier payable is zero.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
           const SizedBox(height: 24),
-          // With-Material projects require strict reconciliation:
-          //   Customer_Inflow == Supplier_Paid + Supplier_Payables
-          // Labour-Rate projects are pass-through, so the equation may legitimately
-          // not balance and we don't block the archive.
-          Builder(builder: (_) {
-            final blockArchive = !isLabour && !balanced;
-            final close = _close;
-            final btnLabel = _archiving
-                ? 'Working…'
-                : (isLabour && close != null && close.serviceFee > 0
-                    ? 'Post Service Fee & Archive'
-                    : 'Archive Project');
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                FilledButton.icon(
-                  onPressed:
-                      _archiving || blockArchive ? null : _archive,
-                  icon: Icon(isLabour && close != null && close.serviceFee > 0
-                      ? Icons.percent
-                      : Icons.archive),
-                  label: Text(btnLabel),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: blockArchive
-                        ? Theme.of(context).colorScheme.error
-                        : null,
-                  ),
+
+          // Labour-Rate close has a two-step flow: post fee first, then
+          // settle the cash gap, then archive. We show the fee button only
+          // when the fee hasn't been booked yet.
+          if (isLabour &&
+              _close != null &&
+              _close!.serviceFee > 0 &&
+              !feeAlreadyPosted) ...[
+            FilledButton.icon(
+              onPressed: _busy ? null : _postServiceFee,
+              icon: const Icon(Icons.percent),
+              label: Text(_busy
+                  ? 'Working…'
+                  : 'Post Service Fee (${fmtMoney(_close!.serviceFee)})'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Posts Dr Project Revenue / Cr Service Fee Income (non-cash). '
+              'After this, settle the ${_close!.netToSettle >= 0 ? "refund to the customer" : "amount owed by the customer"} as a separate transaction so the ledger nets to zero.',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          FilledButton.icon(
+            onPressed: _busy || !canArchive ? null : _archive,
+            icon: const Icon(Icons.archive),
+            label: Text(_busy ? 'Archiving…' : 'Archive Project'),
+            style: FilledButton.styleFrom(
+              backgroundColor:
+                  canArchive ? null : Theme.of(context).colorScheme.error,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            canArchive
+                ? 'Books are settled — safe to archive. Data is preserved for legal evidence.'
+                : 'Archive blocked. Settle the items shown in red above. '
+                    'A project is closeable only when its ledger nets to zero AND no supplier payables for it remain open.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: canArchive ? null : BalanceColors.negative(context),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  blockArchive
-                      ? 'With-Material project: archive blocked while '
-                          '${fmtSignedMoney(rec.supplierPayables)} of supplier '
-                          'payables are still open. Settle them first.'
-                      : (isLabour && close != null && close.serviceFee > 0
-                          ? 'On confirm, the service fee will be posted '
-                              '(Dr Project Revenue / Cr Service Fee Income, '
-                              'non-cash) and the project archived. The '
-                              '${close.netToSettle >= 0 ? "refund" : "amount owed by customer"} '
-                              'still has to be recorded as a separate '
-                              'transaction when cash actually changes hands.'
-                          : 'Archiving sets is_archived=True. Data is preserved for legal evidence.'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: blockArchive
-                            ? BalanceColors.negative(context)
-                            : null,
-                      ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            );
-          }),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
   }
 }
 
-/// Pass/fail banner at the top of the screen — same colour rules as the
-/// rest of the app (primaryContainer for OK, errorContainer for blocked).
+/// Pass/fail banner — primaryContainer when both gates are satisfied,
+/// errorContainer otherwise. Spells out which side is off so the user
+/// doesn't have to scan the rows.
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.balanced, required this.payables});
-  final bool balanced;
+  const _StatusBanner({
+    required this.ok,
+    required this.ledgerNet,
+    required this.payables,
+  });
+  final bool ok;
+  final double ledgerNet;
   final double payables;
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: balanced
+      color: ok
           ? Theme.of(context).colorScheme.primaryContainer
           : Theme.of(context).colorScheme.errorContainer,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            Icon(balanced ? Icons.check_circle : Icons.error_outline,
-                color: balanced
+            Icon(ok ? Icons.check_circle : Icons.error_outline,
+                color: ok
                     ? BalanceColors.positive(context)
                     : BalanceColors.negative(context)),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                balanced
+                ok
                     ? 'Reconciliation passes — safe to archive.'
-                    : 'Outstanding payables: ${fmtSignedMoney(payables)}. Settle before archiving.',
+                    : _failMessage(),
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
@@ -257,14 +288,21 @@ class _StatusBanner extends StatelessWidget {
       ),
     );
   }
+
+  String _failMessage() {
+    final pieces = <String>[
+      if (ledgerNet.abs() >= 0.01)
+        'ledger net ${fmtSignedMoney(ledgerNet)}',
+      if (payables.abs() >= 0.01)
+        'supplier payables ${fmtSignedMoney(payables)}',
+    ];
+    return 'Archive blocked: ${pieces.join(' and ')}. Settle these first.';
+  }
 }
 
-/// Headline card for Labour-Rate close-out math.
-///
-/// Shows what the customer paid vs. what we spent on their behalf, the
-/// computed fee, and the resulting refund or amount-owed. Settling the
-/// difference is a separate manual step (cash actually moving) — this
-/// card is purely informational + drives the auto-fee post on archive.
+/// Headline card for Labour-Rate close-out math. Shows what the customer
+/// paid vs. what we spent, the computed fee, and the resulting refund or
+/// amount-owed. Settling the difference is a separate manual step.
 class _LabourRateCloseCard extends StatelessWidget {
   const _LabourRateCloseCard({required this.close});
   final LabourRateClose close;

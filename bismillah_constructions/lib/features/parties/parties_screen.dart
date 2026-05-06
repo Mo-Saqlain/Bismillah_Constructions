@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../data/models/party.dart';
+import '../../data/repositories/entity_repository.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 
@@ -145,12 +146,26 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
                 leading: const Icon(Icons.archive_outlined),
                 title: const Text('Archive'),
                 subtitle: const Text(
-                    'Hidden from active list — ledger history preserved'),
+                    'Allowed only when the supplier ledger nets to zero — no money owed in either direction'),
                 onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
                   final repo = await ref.read(entityRepoProvider.future);
-                  await repo.archiveSupplier(p.id);
-                  bumpLedger(ref);
-                  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  try {
+                    await repo.archiveSupplier(p.id);
+                    bumpLedger(ref);
+                    if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  } on SupplierNotSettledException catch (e) {
+                    if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                    final amt = e.outstandingBalance;
+                    final direction = amt > 0
+                        ? 'You still owe them ${fmtMoney(amt)}'
+                        : 'They still owe you ${fmtMoney(-amt)}';
+                    messenger.showSnackBar(SnackBar(
+                      content: Text(
+                          'Cannot archive ${p.name} — $direction. Settle the supplier ledger first.'),
+                      duration: const Duration(seconds: 6),
+                    ));
+                  }
                 },
               ),
             if (p.archived)

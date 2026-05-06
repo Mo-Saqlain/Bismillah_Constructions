@@ -14,23 +14,53 @@ import 'pdf_generator.dart';
 
 /// Project ledger — every journal entry recorded against a specific project,
 /// rendered as the same five-column ledger table used by the supplier and
-/// bank/wallet screens.
-class ProjectLedgerPickerScreen extends ConsumerWidget {
+/// bank/wallet screens. The picker has a toggle so the user can also browse
+/// the ledgers of archived (closed) projects without unarchiving them.
+class ProjectLedgerPickerScreen extends ConsumerStatefulWidget {
   const ProjectLedgerPickerScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final projects = ref.watch(projectsProvider);
+  ConsumerState<ProjectLedgerPickerScreen> createState() =>
+      _ProjectLedgerPickerScreenState();
+}
+
+class _ProjectLedgerPickerScreenState
+    extends ConsumerState<ProjectLedgerPickerScreen> {
+  bool _showArchived = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final projects = _showArchived
+        ? ref.watch(archivedProjectsProvider)
+        : ref.watch(activeProjectsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Project Ledger')),
+      appBar: AppBar(
+        title: Text(_showArchived
+            ? 'Closed Projects · Ledger'
+            : 'Project Ledger'),
+        actions: [
+          IconButton(
+            tooltip: _showArchived
+                ? 'Show active projects'
+                : 'View closed projects',
+            icon: Icon(
+                _showArchived ? Icons.unarchive_outlined : Icons.archive_outlined),
+            onPressed: () =>
+                setState(() => _showArchived = !_showArchived),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
       body: AsyncView<List<Project>>(
         value: projects,
         data: (list) {
           if (list.isEmpty) {
-            return const Center(
+            return Center(
                 child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('Define a project to see its ledger.'),
+              padding: const EdgeInsets.all(24),
+              child: Text(_showArchived
+                  ? 'No closed projects yet.'
+                  : 'Define a project to see its ledger.'),
             ));
           }
           return ListView.separated(
@@ -41,11 +71,19 @@ class ProjectLedgerPickerScreen extends ConsumerWidget {
               final p = list[i];
               return Card(
                 child: ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.foundation)),
+                  leading: CircleAvatar(
+                      child: Icon(_showArchived
+                          ? Icons.archive
+                          : Icons.foundation)),
                   title: Text(p.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          decoration: _showArchived
+                              ? TextDecoration.lineThrough
+                              : null)),
                   subtitle: Text('${p.model.label}'
-                      '${p.clientName != null ? ' · ${p.clientName}' : ''}'),
+                      '${p.clientName != null ? ' · ${p.clientName}' : ''}'
+                      '${_showArchived ? ' · ARCHIVED' : ''}'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
                     context,

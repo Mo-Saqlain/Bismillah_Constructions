@@ -6,13 +6,16 @@ import 'transaction_form_screen.dart';
 class TransactionPickerScreen extends StatelessWidget {
   const TransactionPickerScreen({super.key});
 
-  /// Personal / daily draw was removed from the picker per spec — existing
-  /// historical entries still display correctly, but no new ones can be created.
-  // Service Fee was removed from the picker — for Labour-Rate projects the
-  // fee is configured on the project itself (`Project.serviceFeePercent`)
-  // and posted automatically when the project is closed/reconciled, so a
-  // manual fee transaction is no longer a meaningful thing for the user
-  // to add. Personal Draw was already hidden per spec.
+  /// Service Fee was removed from the picker — for Labour-Rate projects the
+  /// fee is configured on the project itself (`Project.serviceFeePercent`)
+  /// and posted automatically when the project is closed/reconciled, so a
+  /// manual fee transaction is no longer a meaningful thing for the user
+  /// to add.
+  ///
+  /// Personal / Owner Draw is back in the picker — it's the canonical way
+  /// to record cash leaving the construction system from any cash-like
+  /// account (Cash, Wallet, Bank). Use it whenever money leaves a wallet
+  /// or bank for non-construction purposes.
   static const _visibleKinds = <TxnKind>[
     TxnKind.materialBuy,
     TxnKind.labourPayment,
@@ -20,6 +23,7 @@ class TransactionPickerScreen extends StatelessWidget {
     TxnKind.supplierPay,
     TxnKind.receiveFromProject,
     TxnKind.walletTransfer,
+    TxnKind.personalDraw,
   ];
 
   @override

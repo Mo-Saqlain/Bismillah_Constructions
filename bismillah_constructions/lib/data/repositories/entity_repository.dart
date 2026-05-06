@@ -139,23 +139,31 @@ class EntityRepository {
 
   /// Soft-archive: preserves data, removes from active lists. Logged.
   ///
-  /// **With-Material projects are gated**: archival throws
-  /// [ReconciliationException] unless `Customer Inflow == Supplier Paid +
-  /// Supplier Payables`. Labour-Rate projects bypass the check (they are
-  /// pass-through and may legitimately be unbalanced at archival).
+  /// **All projects are gated** by the project ledger balance: every cost
+  /// posted against the project must be cancelled by an equivalent inflow
+  /// (project revenue + service-fee income) before the project can be
+  /// archived. Suppliers tied to the project must also be settled
+  /// (no outstanding payable). For Labour-Rate projects, the
+  /// reconciliation screen posts the service-fee reclassification first;
+  /// the user then has to record the refund or collection so the ledger
+  /// nets to zero.
   ///
-  /// Pass `force: true` to bypass the gate (used only for migrations / repair).
+  /// Throws [ReconciliationException] when the gate fails.
+  ///
+  /// Pass `force: true` to bypass the gate — only used for migrations or
+  /// data-repair flows.
   Future<void> archiveProject(String id,
       {String? note, bool force = false}) async {
     final p = await project(id);
     if (p == null) return;
 
-    if (!force && p.model == ProjectModel.withMaterial) {
-      final r = await _withMaterialBalance(id);
-      if (!r.isBalanced) {
+    if (!force) {
+      final balance = await _projectLedgerBalance(id);
+      if (balance.isOutOfBalance) {
         throw ReconciliationException(
           projectId: id,
-          outstandingPayables: r.supplierPayables,
+          outstandingPayables: balance.supplierPayables,
+          netLedger: balance.ledgerNet,
         );
       }
     }
@@ -184,12 +192,18 @@ class EntityRepository {
     });
   }
 
-  /// New reconciliation rule (post-customer-removal): a With-Material project
-  /// can only be archived once **all supplier payables are settled** for that
-  /// project. The cash that was received exceeding cost is the project's
-  /// "savings" and does not need to balance to zero.
-  Future<({double supplierPayables, bool isBalanced})>
-      _withMaterialBalance(String projectId) async {
+  /// Computes both gates that have to be satisfied before a project can be
+  /// archived:
+  ///
+  ///   * `supplierPayables` — outstanding credit balance of
+  ///     `Supplier Payables` for this project. Must be 0 (every credited
+  ///     bill paid down).
+  ///   * `ledgerNet` — net of the project ledger as the user sees it on
+  ///     the Project Ledger screen: cost-side debits (Material, Labour)
+  ///     minus credit-side income (Project Revenue, Service Fee Income).
+  ///     Must be 0 — every rupee charged to the project has to be
+  ///     cancelled by an inflow before archive.
+  Future<_ProjectLedgerBalance> _projectLedgerBalance(String projectId) async {
     Future<double> sum(String column, String accountId) async {
       final rows = await _db.rawQuery(
         'SELECT COALESCE(SUM($column),0) AS s FROM journal_entries '
@@ -199,12 +213,23 @@ class EntityRepository {
       return ((rows.first['s'] as num?) ?? 0).toDouble();
     }
 
-    final paid = await sum('debit', Accounts.supplierPayables.id);
-    final credits = await sum('credit', Accounts.supplierPayables.id);
-    final payables = credits - paid;
-    return (
-      supplierPayables: payables,
-      isBalanced: payables.abs() < 0.01,
+    final supplierPaid = await sum('debit', Accounts.supplierPayables.id);
+    final supplierCredits = await sum('credit', Accounts.supplierPayables.id);
+    final supplierPayables = supplierCredits - supplierPaid;
+
+    final materialDr = await sum('debit', Accounts.materialCosts.id);
+    final labourDr = await sum('debit', Accounts.labourCosts.id);
+    final revenueCr = await sum('credit', Accounts.projectRevenue.id);
+    final feeCr = await sum('credit', Accounts.serviceFeeIncome.id);
+    // Same convention as the project ledger view: debits push the running
+    // total positive (cost incurred), credits pull it negative (income
+    // booked). Zero means everything spent has been paid for.
+    final ledgerNet =
+        (materialDr + labourDr) - (revenueCr + feeCr);
+
+    return _ProjectLedgerBalance(
+      supplierPayables: supplierPayables,
+      ledgerNet: ledgerNet,
     );
   }
 
@@ -327,9 +352,25 @@ class EntityRepository {
     });
   }
 
-  Future<void> archiveSupplier(String id, {String? note}) async {
+  /// Archives a supplier (material or labour). Gated on a zero payable
+  /// balance so the user can't lose track of money still owed in either
+  /// direction. Throws [SupplierNotSettledException] when the balance is
+  /// non-zero. Pass `force: true` to bypass (migrations / data repair).
+  Future<void> archiveSupplier(String id,
+      {String? note, bool force = false}) async {
     final p = await supplier(id);
     if (p == null) return;
+
+    if (!force) {
+      final balance = await _supplierPayableBalance(id);
+      if (balance.abs() >= 0.01) {
+        throw SupplierNotSettledException(
+          supplierId: id,
+          outstandingBalance: balance,
+        );
+      }
+    }
+
     final now = DateTime.now().toUtc();
     final dev = await _deviceId();
     await _db.transaction((txn) async {
@@ -352,6 +393,18 @@ class EntityRepository {
             timestamp: now,
           ).toMap());
     });
+  }
+
+  /// Net Supplier Payables for one supplier, in the credit-natural
+  /// direction (positive = we owe them, negative = they owe us).
+  Future<double> _supplierPayableBalance(String supplierId) async {
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(SUM(credit),0) - COALESCE(SUM(debit),0) AS bal '
+      'FROM journal_entries '
+      'WHERE account_id = ? AND supplier_id = ? AND is_deleted = 0',
+      [Accounts.supplierPayables.id, supplierId],
+    );
+    return ((rows.first['bal'] as num?) ?? 0).toDouble();
   }
 
   Future<void> unarchiveSupplier(String id) async {
@@ -754,18 +807,51 @@ class EntityRepository {
   }
 }
 
-/// Thrown when an attempt is made to archive a With-Material project whose
-/// books do not satisfy `Customer Inflow == Supplier Paid + Supplier Payables`.
-/// Thrown when archival of a With-Material project is attempted while
-/// supplier payables for that project are still outstanding.
+/// Internal struct for [EntityRepository._projectLedgerBalance]. Exists
+/// purely to bundle the two gating numbers the archive guard needs.
+class _ProjectLedgerBalance {
+  final double supplierPayables;
+  final double ledgerNet;
+  const _ProjectLedgerBalance({
+    required this.supplierPayables,
+    required this.ledgerNet,
+  });
+
+  /// Gate fails when either side has not been zeroed out (1 paisa
+  /// tolerance to absorb floating-point noise from divisions).
+  bool get isOutOfBalance =>
+      supplierPayables.abs() >= 0.01 || ledgerNet.abs() >= 0.01;
+}
+
+/// Thrown when an attempt is made to archive a project whose ledger has
+/// not been fully reconciled. Carries both the outstanding supplier
+/// payable balance and the project ledger net so the UI can tell the
+/// user what's wrong.
 class ReconciliationException implements Exception {
   final String projectId;
   final double outstandingPayables;
+  final double netLedger;
   const ReconciliationException({
     required this.projectId,
     required this.outstandingPayables,
+    this.netLedger = 0,
   });
   @override
   String toString() => 'ReconciliationException(project=$projectId, '
-      'outstandingPayables=$outstandingPayables)';
+      'outstandingPayables=$outstandingPayables, netLedger=$netLedger)';
+}
+
+/// Thrown when an attempt is made to archive a supplier whose payable
+/// balance is not zero. The UI catches this and tells the user how much
+/// is still owed (or owed-to-us).
+class SupplierNotSettledException implements Exception {
+  final String supplierId;
+  final double outstandingBalance;
+  const SupplierNotSettledException({
+    required this.supplierId,
+    required this.outstandingBalance,
+  });
+  @override
+  String toString() => 'SupplierNotSettledException(supplier=$supplierId, '
+      'balance=$outstandingBalance)';
 }

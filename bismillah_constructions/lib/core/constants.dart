@@ -180,7 +180,7 @@ extension TxnKindX on TxnKind {
         TxnKind.supplierPay => 'Supplier / Worker Payment',
         TxnKind.receiveFromProject => 'Receive from Project',
         TxnKind.walletTransfer => 'Wallet Transfer',
-        TxnKind.personalDraw => 'Personal / Daily Draw',
+        TxnKind.personalDraw => 'Personal / Owner Draw',
         TxnKind.serviceFee => 'Service Fee Logged',
       };
   String get blurb => switch (this) {
@@ -197,7 +197,7 @@ extension TxnKindX on TxnKind {
         TxnKind.walletTransfer =>
           'Move cash between bank / cash / supervisor wallets',
         TxnKind.personalDraw =>
-          'Daily / personal expense — keeps payables intact',
+          'Money leaving cash, a wallet or a bank for non-construction use (personal expenses, transfers out, owner draw)',
         TxnKind.serviceFee =>
           'Log service fee earned (% of project spend, labour-rate model)',
       };

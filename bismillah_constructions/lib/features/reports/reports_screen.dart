@@ -7,10 +7,18 @@ import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
+import 'project_profitability_screen.dart';
 import 'supplier_ledger_picker_screen.dart';
 import 'wage_ledger_screen.dart';
 import 'bank_ledger_screen.dart';
 
+/// Reports landing page. Tiles are grouped into four sections so the
+/// list stays scannable as more reports get added:
+///   * **Financial Statements** — the big-three numbers a small business
+///     looks at first (P&L, Balance Sheet, Cash Flow).
+///   * **Ledgers** — per-party / per-account statements of activity.
+///   * **Aging** — what's owed and how stale it is.
+///   * **Project** — project-specific reports (currently just BvA).
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
 
@@ -21,6 +29,7 @@ class ReportsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          _SectionTitle('Financial Statements'),
           _ReportTile(
             icon: Icons.trending_up,
             title: 'Income Statement (P&L)',
@@ -40,13 +49,25 @@ class ReportsScreen extends StatelessWidget {
                     builder: (_) => const BalanceSheetScreen())),
           ),
           _ReportTile(
-            icon: Icons.assessment,
-            title: 'Budget vs Actual',
-            subtitle: 'Project budget vs actual spend, by category',
+            icon: Icons.swap_vert,
+            title: 'Cash Flow Statement',
+            subtitle:
+                'Operating, financing and net cash movement across all projects',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) => const ProjectBvaPickerScreen())),
+                    builder: (_) => const CashFlowScreen())),
+          ),
+          _SectionTitle('Ledgers'),
+          _ReportTile(
+            icon: Icons.receipt_long,
+            title: 'Material Supplier Ledger',
+            subtitle:
+                'Statement of account for a material supplier (across or within a project)',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SupplierLedgerPickerScreen())),
           ),
           _ReportTile(
             icon: Icons.engineering,
@@ -57,26 +78,6 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const WageLedgerPickerScreen())),
-          ),
-          _ReportTile(
-            icon: Icons.swap_vert,
-            title: 'Cash Flow Statement',
-            subtitle:
-                'Operating, financing and net cash movement across all projects',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const CashFlowScreen())),
-          ),
-          _ReportTile(
-            icon: Icons.receipt_long,
-            title: 'Material Supplier Ledger',
-            subtitle:
-                'Statement of account for a material supplier (across or within a project)',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const SupplierLedgerPickerScreen())),
           ),
           _ReportTile(
             icon: Icons.account_balance_wallet,
@@ -97,6 +98,7 @@ class ReportsScreen extends StatelessWidget {
                 MaterialPageRoute(
                     builder: (_) => const ProjectLedgerPickerScreen())),
           ),
+          _SectionTitle('Aging'),
           _ReportTile(
             icon: Icons.hourglass_bottom,
             title: 'Aging — Payables',
@@ -117,10 +119,46 @@ class ReportsScreen extends StatelessWidget {
                 MaterialPageRoute(
                     builder: (_) => const AgingReceivablesScreen())),
           ),
+          _SectionTitle('Project Analysis'),
+          _ReportTile(
+            icon: Icons.assessment,
+            title: 'Budget vs Actual',
+            subtitle: 'Project budget vs actual spend, by category',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ProjectBvaPickerScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.leaderboard,
+            title: 'Project Profitability',
+            subtitle:
+                'Per-project Received vs Spent vs Net, ranked by bottom-line return',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ProjectProfitabilityScreen())),
+          ),
         ],
       ),
     );
   }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 16, 4, 6),
+        child: Text(
+          text,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+      );
 }
 
 class _ReportTile extends StatelessWidget {

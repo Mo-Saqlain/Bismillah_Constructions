@@ -13,17 +13,44 @@ import '../common/ledger_view.dart';
 import 'csv_export.dart';
 import 'pdf_generator.dart';
 
-/// Picker for the Wage Ledger — only labour-category suppliers (and
-/// uncategorised legacy ones) appear, since the wage ledger is a per-worker
-/// view of what we owe each labourer.
-class WageLedgerPickerScreen extends ConsumerWidget {
+/// Picker for the Labour Supplier Ledger — only labour-category suppliers
+/// (and uncategorised legacy ones) appear, since this is a per-worker view
+/// of what we owe each labourer. The "View Closed" toggle pulls archived
+/// workers so the user can review historical wages.
+class WageLedgerPickerScreen extends ConsumerStatefulWidget {
   const WageLedgerPickerScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final suppliers = ref.watch(suppliersProvider);
+  ConsumerState<WageLedgerPickerScreen> createState() =>
+      _WageLedgerPickerScreenState();
+}
+
+class _WageLedgerPickerScreenState
+    extends ConsumerState<WageLedgerPickerScreen> {
+  bool _showArchived = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final suppliers = _showArchived
+        ? ref.watch(archivedSuppliersProvider)
+        : ref.watch(suppliersProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Labour Supplier Ledger')),
+      appBar: AppBar(
+        title: Text(_showArchived
+            ? 'Closed Labour Suppliers'
+            : 'Labour Supplier Ledger'),
+        actions: [
+          IconButton(
+            tooltip: _showArchived
+                ? 'Show active workers'
+                : 'View closed workers',
+            icon: Icon(
+                _showArchived ? Icons.unarchive_outlined : Icons.archive_outlined),
+            onPressed: () => setState(() => _showArchived = !_showArchived),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
       body: AsyncView<List<Party>>(
         value: suppliers,
         data: (list) {
@@ -32,11 +59,12 @@ class WageLedgerPickerScreen extends ConsumerWidget {
                   s.category == null || s.category == SupplierCategory.labor)
               .toList();
           if (workers.isEmpty) {
-            return const Center(
+            return Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                    'No labour-category suppliers yet. Add one from Manage → Suppliers.'),
+                padding: const EdgeInsets.all(24),
+                child: Text(_showArchived
+                    ? 'No closed labour suppliers.'
+                    : 'No labour-category suppliers yet. Add one from Manage → Suppliers.'),
               ),
             );
           }
@@ -48,10 +76,20 @@ class WageLedgerPickerScreen extends ConsumerWidget {
               final w = workers[i];
               return Card(
                 child: ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.engineering)),
+                  leading: CircleAvatar(
+                      child: Icon(_showArchived
+                          ? Icons.archive
+                          : Icons.engineering)),
                   title: Text(w.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: w.phone != null ? Text('Ph: ${w.phone}') : null,
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          decoration: _showArchived
+                              ? TextDecoration.lineThrough
+                              : null)),
+                  subtitle: Text([
+                    if (w.phone != null) 'Ph: ${w.phone}',
+                    if (_showArchived) 'ARCHIVED',
+                  ].join(' · ')),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
                     context,

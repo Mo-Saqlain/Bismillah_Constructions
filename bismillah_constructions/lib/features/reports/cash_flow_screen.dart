@@ -116,10 +116,6 @@ class _CashFlowScreenState extends ConsumerState<CashFlowScreen> {
         ['FINANCING ACTIVITIES', '', ''],
         ['', 'Personal / owner draws (out)',
             (-s.financingOutflow).toStringAsFixed(2)],
-        if (s.transferIn > 0 || s.transferOut > 0) ...[
-          ['', 'Wallet transfers in', s.transferIn.toStringAsFixed(2)],
-          ['', 'Wallet transfers out', (-s.transferOut).toStringAsFixed(2)],
-        ],
         ['', 'Net cash from financing', s.netFinancing.toStringAsFixed(2)],
         ['', '', ''],
         if (s.otherNet != 0) ...[
@@ -183,13 +179,6 @@ class _SummaryCard extends StatelessWidget {
             _section(context, 'Financing Activities'),
             _line(context, '  Personal / owner draws (out)',
                 -summary.financingOutflow),
-            // Wallet transfers: gross volume in / out are surfaced for
-            // visibility but always net to zero, so the bottom-line cash
-            // change isn't affected.
-            if (summary.transferIn > 0 || summary.transferOut > 0) ...[
-              _line(context, '  Wallet transfers in', summary.transferIn),
-              _line(context, '  Wallet transfers out', -summary.transferOut),
-            ],
             _line(context, '  Net cash from financing', summary.netFinancing,
                 bold: true),
             if (summary.otherNet != 0) ...[

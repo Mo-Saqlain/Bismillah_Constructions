@@ -657,7 +657,6 @@ class LedgerRepository {
     );
 
     double opIn = 0, opOut = 0, finOut = 0, other = 0;
-    double transferIn = 0, transferOut = 0;
 
     for (final row in cashRows) {
       final txnId = row['transaction_id'] as String;
@@ -673,14 +672,9 @@ class LedgerRepository {
         [txnId, ...cashIds],
       );
       if (sibling.isEmpty) {
-        // Wallet transfer — both legs are cash-like. The consolidated
-        // cash position doesn't change, but we surface the gross volume
-        // under Financing so the user can see the activity.
-        if (delta > 0) {
-          transferIn += delta;
-        } else {
-          transferOut += -delta;
-        }
+        // Wallet transfer — both legs are cash-like, so consolidated cash
+        // is unchanged. Skip entirely; surfacing them on the cash flow
+        // statement was just noise.
         continue;
       }
       final otherAccount = sibling.first['account_id'] as String;
@@ -714,8 +708,6 @@ class LedgerRepository {
       operatingInflow: opIn,
       operatingOutflow: opOut,
       financingOutflow: finOut,
-      transferIn: transferIn,
-      transferOut: transferOut,
       otherNet: other,
     );
   }
@@ -822,6 +814,39 @@ class LedgerRepository {
       projectInflow: projectInflow,
       supplierPaid: supplierPaid,
       supplierPayables: supplierPayables,
+    );
+  }
+
+  /// Same numbers `archiveProject`'s gate checks, exposed publicly so the
+  /// reconciliation screen can render the "what's still wrong" message
+  /// without duplicating the SQL.
+  Future<({double supplierPayables, double ledgerNet, double serviceFeeBooked})>
+      projectArchiveStatus(String projectId) async {
+    Future<double> sum(String column, String accountId) async {
+      final rows = await _db.rawQuery(
+        'SELECT COALESCE(SUM($column),0) AS s FROM journal_entries '
+        'WHERE account_id = ? AND project_id = ? AND is_deleted = 0',
+        [accountId, projectId],
+      );
+      return ((rows.first['s'] as num?) ?? 0).toDouble();
+    }
+
+    final supplierPaid = await sum('debit', Accounts.supplierPayables.id);
+    final supplierCredits = await sum('credit', Accounts.supplierPayables.id);
+    final supplierPayables = supplierCredits - supplierPaid;
+
+    final materialDr = await sum('debit', Accounts.materialCosts.id);
+    final labourDr = await sum('debit', Accounts.labourCosts.id);
+    final revenueCr = await sum('credit', Accounts.projectRevenue.id);
+    final feeCr = await sum('credit', Accounts.serviceFeeIncome.id);
+    final ledgerNet = (materialDr + labourDr) - (revenueCr + feeCr);
+
+    return (
+      supplierPayables: supplierPayables,
+      ledgerNet: ledgerNet,
+      // The screen uses serviceFeeBooked to know whether the
+      // labour-rate fee reclassification has already been posted.
+      serviceFeeBooked: feeCr,
     );
   }
 
@@ -1332,12 +1357,6 @@ class CashFlowSummary {
   final double operatingInflow;
   final double operatingOutflow;
   final double financingOutflow;
-  /// Gross movement on wallet transfers (always equal to each other since
-  /// every transfer has a matching destination credit). Surfaced under
-  /// Financing for visibility — they net to zero so they don't move the
-  /// closing cash number.
-  final double transferIn;
-  final double transferOut;
   /// Catch-all for cash legs whose sibling didn't land in any of the
   /// canonical buckets — e.g. legacy data, manual journal corrections.
   final double otherNet;
@@ -1347,8 +1366,6 @@ class CashFlowSummary {
     required this.operatingInflow,
     required this.operatingOutflow,
     required this.financingOutflow,
-    this.transferIn = 0,
-    this.transferOut = 0,
     required this.otherNet,
   });
 
@@ -1361,12 +1378,7 @@ class CashFlowSummary {
   );
 
   double get netOperating => operatingInflow - operatingOutflow;
-  /// Net financing change. Wallet transfers contribute zero (transferIn
-  /// always equals transferOut), so the math reduces to `-financingOutflow`,
-  /// but writing it out keeps the formula honest if either side ever
-  /// diverges (e.g. a deleted leg).
-  double get netFinancing =>
-      -financingOutflow + transferIn - transferOut;
+  double get netFinancing => -financingOutflow;
   double get netChange => netOperating + netFinancing + otherNet;
   double get closingCash => openingCash + netChange;
 }

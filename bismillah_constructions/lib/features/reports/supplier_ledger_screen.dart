@@ -214,15 +214,43 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
 /// Picker for the Material Supplier Ledger — only material-category
 /// suppliers (and uncategorised legacy ones) are listed. Labour suppliers
 /// are reached via the Labour Supplier Ledger picker instead so the two
-/// reports stay disjoint.
-class SupplierLedgerPickerScreen extends ConsumerWidget {
+/// reports stay disjoint. The "View Closed" toggle in the AppBar swaps
+/// the active list for archived suppliers so the user can pull historical
+/// ledgers without unarchiving.
+class SupplierLedgerPickerScreen extends ConsumerStatefulWidget {
   const SupplierLedgerPickerScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final suppliers = ref.watch(suppliersProvider);
+  ConsumerState<SupplierLedgerPickerScreen> createState() =>
+      _SupplierLedgerPickerScreenState();
+}
+
+class _SupplierLedgerPickerScreenState
+    extends ConsumerState<SupplierLedgerPickerScreen> {
+  bool _showArchived = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final suppliers = _showArchived
+        ? ref.watch(archivedSuppliersProvider)
+        : ref.watch(suppliersProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Material Supplier Ledger')),
+      appBar: AppBar(
+        title: Text(_showArchived
+            ? 'Closed Material Suppliers'
+            : 'Material Supplier Ledger'),
+        actions: [
+          IconButton(
+            tooltip: _showArchived
+                ? 'Show active suppliers'
+                : 'View closed suppliers',
+            icon: Icon(
+                _showArchived ? Icons.unarchive_outlined : Icons.archive_outlined),
+            onPressed: () => setState(() => _showArchived = !_showArchived),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
       body: AsyncView<List<Party>>(
         value: suppliers,
         data: (list) {
@@ -232,11 +260,12 @@ class SupplierLedgerPickerScreen extends ConsumerWidget {
                   s.category == SupplierCategory.material)
               .toList();
           if (materialSuppliers.isEmpty) {
-            return const Center(
+            return Center(
                 child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                  'No material suppliers yet. Add one from Manage → Suppliers.'),
+              padding: const EdgeInsets.all(24),
+              child: Text(_showArchived
+                  ? 'No closed material suppliers.'
+                  : 'No material suppliers yet. Add one from Manage → Suppliers.'),
             ));
           }
           return ListView.separated(
@@ -247,11 +276,19 @@ class SupplierLedgerPickerScreen extends ConsumerWidget {
               final s = materialSuppliers[i];
               return Card(
                 child: ListTile(
-                  leading:
-                      const CircleAvatar(child: Icon(Icons.local_shipping)),
-                  title: Text(s.name),
-                  subtitle:
-                      s.category != null ? Text(s.category!.label) : null,
+                  leading: CircleAvatar(
+                      child: Icon(_showArchived
+                          ? Icons.archive
+                          : Icons.local_shipping)),
+                  title: Text(s.name,
+                      style: _showArchived
+                          ? const TextStyle(
+                              decoration: TextDecoration.lineThrough)
+                          : null),
+                  subtitle: Text([
+                    if (s.category != null) s.category!.label,
+                    if (_showArchived) 'ARCHIVED',
+                  ].join(' · ')),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
                     context,
