@@ -94,17 +94,6 @@ class DashboardScreen extends ConsumerWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatTile(
-                            label: 'Net Liquidity',
-                            value: s.netLiquidity,
-                            positive: s.netLiquidity >= 0),
-                      ),
-                    ],
-                  ),
                   if (s.counterReceivables > 0 || s.counterPayables > 0) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -435,22 +424,16 @@ class _TreasuryCard extends StatelessWidget {
                     .titleMedium
                     ?.copyWith(color: scheme.onPrimaryContainer)),
             const SizedBox(height: 12),
+            // Three derived metrics in one row. Per-account balances (Cash +
+            // each bank) live in the Wallets & Banks grid below; their sum is
+            // implicit in Net Liquidity / Net Position / Net Worth.
             Row(
               children: [
-                _TreasuryCell(
-                    label: 'Liquid Cash',
-                    value: liquidCash,
-                    onContainer: true),
-                const SizedBox(width: 8),
                 _TreasuryCell(
                     label: 'Net Liquidity',
                     value: netLiquidity,
                     onContainer: true),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
+                const SizedBox(width: 8),
                 _TreasuryCell(
                     label: 'Net Position',
                     value: netPosition,
