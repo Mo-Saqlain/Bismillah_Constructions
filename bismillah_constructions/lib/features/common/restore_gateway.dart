@@ -4,22 +4,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_restart.dart';
-import '../../core/formatters.dart';
 import '../../data/db/local_db.dart';
-import '../../data/services/backup_service.dart';
 import '../../providers/providers.dart';
 import '../home/home_screen.dart';
 
-/// Shown once on every cold start instead of [HomeScreen].
+/// Thin startup gate that sits in front of [HomeScreen].
 ///
-/// If the database is empty AND a backup file exists in the backup folder,
-/// the user is prompted to restore it before the app continues. The prompt
-/// only fires when the database is genuinely empty — i.e. right after a
-/// fresh install or a full data wipe — so it never interrupts normal use.
+/// On Android the primary database now lives in external app-scoped storage
+/// (Bismillah_Data folder) which survives uninstall on most devices, so no
+/// "restore from backup?" dialog is needed.
 ///
-/// On confirm: closes the in-process (empty) DB, copies the backup file over
-/// the DB path, reopens the DB with the restored data, and invalidates all
-/// Riverpod providers so every screen picks up the new content.
+/// The only job of this widget is a one-time silent migration: if the external
+/// DB is still empty (first run after an app update or a device with no
+/// external storage fallback) AND the old internal database file has data,
+/// copy it to the new location before proceeding.  The user never sees a
+/// dialog — the app just opens.
 class RestoreGateway extends ConsumerStatefulWidget {
   const RestoreGateway({super.key});
 
@@ -28,126 +27,84 @@ class RestoreGateway extends ConsumerStatefulWidget {
 }
 
 class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
-  bool _checked = false;
-  bool _restoring = false;
+  bool _ready = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAutoRestore());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startup());
   }
 
-  Future<void> _checkAutoRestore() async {
+  Future<void> _startup() async {
     try {
+      // Open the DB (now from external persistent path on Android).
       final db = await ref.read(dbProvider.future);
 
-      final projResult =
-          await db.rawQuery('SELECT COUNT(*) AS c FROM projects');
-      final projCount = (projResult.first['c'] as int?) ?? 0;
-
-      final entryResult =
-          await db.rawQuery('SELECT COUNT(*) AS c FROM journal_entries');
-      final entryCount = (entryResult.first['c'] as int?) ?? 0;
+      final projCount =
+          ((await db.rawQuery('SELECT COUNT(*) AS c FROM projects'))
+                  .first['c'] as int?) ??
+              0;
+      final entryCount =
+          ((await db.rawQuery('SELECT COUNT(*) AS c FROM journal_entries'))
+                  .first['c'] as int?) ??
+              0;
 
       if (projCount > 0 || entryCount > 0) {
-        // Database already has content — nothing to restore.
-        if (mounted) setState(() => _checked = true);
+        // DB already has data — normal cold start.
+        if (mounted) setState(() => _ready = true);
         return;
       }
 
-      // Empty DB — look for a backup in the backup folder.
-      final backupPath =
-          await BackupService.findLatestBackupForAutoRestore();
-      if (backupPath == null || !mounted) {
-        if (mounted) setState(() => _checked = true);
-        return;
-      }
-
-      final stat = await File(backupPath).stat();
-      final backupDate = fmtDateTime(stat.modified.toLocal());
-      final sizeMb = (stat.size / (1024 * 1024)).toStringAsFixed(1);
-
-      if (!mounted) return;
-      final confirm = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Restore previous data?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                  'A backup from a previous installation was found:'),
-              const SizedBox(height: 12),
-              Text('Date: $backupDate',
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-              Text('Size: $sizeMb MB'),
-              const SizedBox(height: 12),
-              const Text(
-                  'Restore it now? You can also skip and import it '
-                  'manually later from Settings → Import backup.'),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Skip')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Restore')),
-          ],
-        ),
-      );
-
-      if (confirm == true && mounted) {
-        setState(() => _restoring = true);
-        await _doRestore(backupPath);
+      // External DB is empty. Check whether the old internal-storage DB has
+      // data that should be migrated silently (first run after update, or
+      // fallback path is the same as legacy path).
+      if (Platform.isAndroid) {
+        await _tryMigrateFromLegacy();
+        return; // either restartApp() or _ready = true happens inside
       }
     } catch (_) {
-      // Any error → proceed to HomeScreen with whatever data exists.
+      // Any error — just open HomeScreen with whatever data exists.
     }
 
-    if (mounted) {
-      setState(() {
-        _checked = true;
-        _restoring = false;
-      });
-    }
+    if (mounted) setState(() => _ready = true);
   }
 
-  Future<void> _doRestore(String backupPath) async {
-    final dbPath = LocalDb.instance.dbPath;
-    if (dbPath == null) return;
+  Future<void> _tryMigrateFromLegacy() async {
+    try {
+      final oldPath = await LocalDb.legacyInternalPath();
+      final newPath = LocalDb.instance.dbPath;
 
-    // Close the in-process (empty) DB so sqflite releases the file handle.
-    await LocalDb.instance.reinitialize();
+      // If paths are the same, external storage wasn't available and we fell
+      // back to the same directory — nothing to migrate.
+      if (newPath == null || newPath == oldPath) {
+        if (mounted) setState(() => _ready = true);
+        return;
+      }
 
-    // Overwrite the DB file with the backup.
-    await File(backupPath).copy(dbPath);
+      final oldFile = File(oldPath);
+      // Only migrate if the legacy file actually exists and has real content
+      // (empty SQLite headers are < 4 KB).
+      if (!await oldFile.exists() || await oldFile.length() < 4096) {
+        if (mounted) setState(() => _ready = true);
+        return;
+      }
 
-    // Trigger a full ProviderScope teardown → all providers rebuild from
-    // scratch and LocalDb.open() reopens the now-restored file cleanly.
-    restartApp();
+      // Close the empty external DB, copy the legacy file over it, reopen.
+      await LocalDb.instance.reinitialize();
+      await oldFile.copy(newPath);
+      // Rebuild the entire ProviderScope so every provider reopens the
+      // newly-populated DB from scratch.
+      restartApp();
+    } catch (_) {
+      if (mounted) setState(() => _ready = true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_checked || _restoring) {
-      return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(),
-              if (_restoring) ...[
-                const SizedBox(height: 16),
-                Text('Restoring backup…',
-                    style: Theme.of(context).textTheme.bodyMedium),
-              ],
-            ],
-          ),
-        ),
+    if (!_ready) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
       );
     }
     return const HomeScreen();

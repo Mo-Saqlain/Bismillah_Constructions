@@ -814,26 +814,33 @@ class _ManageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final typeLabel = isLabour ? 'labour' : 'material';
+    final message = empty
+        ? 'No $typeLabel types defined. Add one to continue.'
+        : 'Manage your $typeLabel categories.';
+
+    // Column layout ensures the message always has full width and is never
+    // squeezed into a narrow column that causes per-character line breaks.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: Text(
-            empty
-                ? 'No ${isLabour ? 'labour' : 'material'} types defined. Add one to continue.'
-                : 'Manage your ${isLabour ? 'labour' : 'material'} categories.',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
+        Text(
+          message,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
         ),
-        const SizedBox(width: 8),
-        FilledButton.icon(
-          icon: const Icon(Icons.add),
-          label: const Text('Add type'),
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => isLabour
-                  ? const LabourTypesScreen()
-                  : const MaterialTypesScreen(),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            icon: const Icon(Icons.add),
+            label: Text('Add $typeLabel type'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => isLabour
+                    ? const LabourTypesScreen()
+                    : const MaterialTypesScreen(),
+              ),
             ),
           ),
         ),

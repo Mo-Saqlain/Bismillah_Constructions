@@ -29,6 +29,29 @@ class LocalDb {
     _db = null;
   }
 
+  /// The path that was used before we moved the DB to external persistent
+  /// storage (Android only). Used once by the startup migration check to copy
+  /// old data to the new location on the first run after an app update.
+  static Future<String> legacyInternalPath() async {
+    return p.join(await getDatabasesPath(), 'solo_con.db');
+  }
+
+  /// Resolves the persistent DB directory on Android — external app-scoped
+  /// Documents storage which survives app uninstall on most devices.
+  /// Falls back to the internal documents dir if external is unavailable.
+  static Future<Directory> _persistentDbDir() async {
+    try {
+      final dirs = await getExternalStorageDirectories(
+          type: StorageDirectory.documents);
+      if (dirs != null && dirs.isNotEmpty) {
+        final d = Directory(p.join(dirs.first.path, 'Bismillah_Data'));
+        await d.create(recursive: true);
+        return d;
+      }
+    } catch (_) {}
+    return getApplicationDocumentsDirectory();
+  }
+
   Future<Database> open() async {
     if (_db != null) return _db!;
 
@@ -39,6 +62,10 @@ class LocalDb {
       sqfliteFfiInit();
       factory = databaseFactoryFfi;
       final dir = await getApplicationSupportDirectory();
+      path = p.join(dir.path, 'solo_con.db');
+    } else if (Platform.isAndroid) {
+      factory = databaseFactory;
+      final dir = await _persistentDbDir();
       path = p.join(dir.path, 'solo_con.db');
     } else {
       factory = databaseFactory;
