@@ -1,3 +1,4 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,19 +9,25 @@ import '../../data/repositories/ledger_repository.dart';
 import '../../providers/providers.dart';
 import 'csv_export.dart';
 
-/// Budget vs Actual per project, broken down by category.
-///
-/// Categories: each material type purchased + an "Other Material" residual
-/// for material costs posted directly to the journal without an inventory row,
-/// plus Labour. The project's `budget` field is the BoQ estimate.
-class ProjectBvaScreen extends ConsumerWidget {
+enum _SpendPeriod { day, week, month }
+
+class ProjectBvaScreen extends ConsumerStatefulWidget {
   const ProjectBvaScreen({super.key, required this.project});
   final Project project;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProjectBvaScreen> createState() => _ProjectBvaScreenState();
+}
+
+class _ProjectBvaScreenState extends ConsumerState<ProjectBvaScreen> {
+  _SpendPeriod _period = _SpendPeriod.day;
+
+  @override
+  Widget build(BuildContext context) {
     ref.watch(ledgerVersionProvider);
+    final project = widget.project;
     final dataAsync = ref.watch(_bvaProvider(project.id));
+    final dailyAsync = ref.watch(_projectDailySpendProvider(project.id));
     final budget = project.budget ?? 0;
 
     return Scaffold(
@@ -57,6 +64,7 @@ class ProjectBvaScreen extends ConsumerWidget {
           return ListView(
             padding: const EdgeInsets.all(12),
             children: [
+              // ── Summary card ──────────────────────────────────────────────
               Card(
                 color: overrun
                     ? Theme.of(context).colorScheme.errorContainer
@@ -90,9 +98,7 @@ class ProjectBvaScreen extends ConsumerWidget {
                       Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(remaining >= 0
-                                ? 'Remaining'
-                                : 'Over Budget'),
+                            Text(remaining >= 0 ? 'Remaining' : 'Over Budget'),
                             Text(fmtSignedMoney(remaining),
                                 style: TextStyle(
                                     fontWeight: FontWeight.w700,
@@ -118,6 +124,65 @@ class ProjectBvaScreen extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 8),
+
+              // ── Budget allocation pie chart ───────────────────────────────
+              if (budget > 0 && spend > 0) ...[
+                _SectionHeader('Budget Allocation'),
+                _BudgetPieChart(
+                  material: bva.totalMaterial,
+                  labour: bva.labour,
+                  remaining: remaining > 0 ? remaining : 0,
+                ),
+                const SizedBox(height: 8),
+              ],
+
+              // ── Material breakdown pie chart ──────────────────────────────
+              if (bva.totalMaterial > 0 &&
+                  (bva.materialByType.length > 1 || bva.otherMaterial > 0)) ...[
+                _SectionHeader('Material Breakdown'),
+                _MaterialPieChart(bva: bva),
+                const SizedBox(height: 8),
+              ],
+
+              // ── Spending over time bar chart ──────────────────────────────
+              _SectionHeader('Spending Over Time'),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      SegmentedButton<_SpendPeriod>(
+                        segments: const [
+                          ButtonSegment(
+                              value: _SpendPeriod.day, label: Text('Day')),
+                          ButtonSegment(
+                              value: _SpendPeriod.week, label: Text('Week')),
+                          ButtonSegment(
+                              value: _SpendPeriod.month, label: Text('Month')),
+                        ],
+                        selected: {_period},
+                        onSelectionChanged: (s) =>
+                            setState(() => _period = s.first),
+                        style: const ButtonStyle(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      ),
+                      const SizedBox(height: 12),
+                      dailyAsync.when(
+                        loading: () =>
+                            const SizedBox(height: 120, child: Center(child: CircularProgressIndicator())),
+                        error: (e, _) => Text('Error: $e'),
+                        data: (daily) => _SpendBarChart(
+                          daily: daily,
+                          period: _period,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ── Category data table ───────────────────────────────────────
               Card(
                 clipBehavior: Clip.antiAlias,
                 child: SingleChildScrollView(
@@ -194,9 +259,358 @@ class ProjectBvaScreen extends ConsumerWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+      child: Text(text,
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _BudgetPieChart extends StatelessWidget {
+  const _BudgetPieChart({
+    required this.material,
+    required this.labour,
+    required this.remaining,
+  });
+  final double material;
+  final double labour;
+  final double remaining;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = material + labour + remaining;
+    if (total <= 0) return const SizedBox.shrink();
+
+    final sections = [
+      if (material > 0)
+        PieChartSectionData(
+          value: material,
+          color: Colors.orange.shade600,
+          title: '${(material / total * 100).toStringAsFixed(0)}%',
+          radius: 55,
+          titleStyle: const TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+      if (labour > 0)
+        PieChartSectionData(
+          value: labour,
+          color: Colors.blue.shade600,
+          title: '${(labour / total * 100).toStringAsFixed(0)}%',
+          radius: 55,
+          titleStyle: const TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+      if (remaining > 0)
+        PieChartSectionData(
+          value: remaining,
+          color: Colors.green.shade500,
+          title: '${(remaining / total * 100).toStringAsFixed(0)}%',
+          radius: 55,
+          titleStyle: const TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            SizedBox(
+              height: 160,
+              child: PieChart(PieChartData(
+                sections: sections,
+                centerSpaceRadius: 30,
+                sectionsSpace: 2,
+              )),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                if (material > 0)
+                  _Legend(color: Colors.orange.shade600,
+                      label: 'Material', value: fmtMoney(material)),
+                if (labour > 0)
+                  _Legend(color: Colors.blue.shade600,
+                      label: 'Labour', value: fmtMoney(labour)),
+                if (remaining > 0)
+                  _Legend(color: Colors.green.shade500,
+                      label: 'Remaining', value: fmtMoney(remaining)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MaterialPieChart extends StatelessWidget {
+  const _MaterialPieChart({required this.bva});
+  final ProjectBva bva;
+
+  static const _palette = [
+    Colors.teal,
+    Colors.purple,
+    Colors.red,
+    Colors.amber,
+    Colors.cyan,
+    Colors.deepOrange,
+    Colors.indigo,
+    Colors.lime,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = <(String, double)>[
+      for (final e in bva.materialByType.entries) (e.key, e.value),
+      if (bva.otherMaterial > 0) ('Other', bva.otherMaterial),
+    ];
+    if (entries.isEmpty) return const SizedBox.shrink();
+    final total = entries.fold<double>(0, (a, e) => a + e.$2);
+
+    final sections = entries.asMap().entries.map((entry) {
+      final color = _palette[entry.key % _palette.length];
+      final pct = (entry.value.$2 / total * 100).toStringAsFixed(0);
+      return PieChartSectionData(
+        value: entry.value.$2,
+        color: color,
+        title: '$pct%',
+        radius: 55,
+        titleStyle: const TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
+      );
+    }).toList();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            SizedBox(
+              height: 160,
+              child: PieChart(PieChartData(
+                sections: sections,
+                centerSpaceRadius: 30,
+                sectionsSpace: 2,
+              )),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              alignment: WrapAlignment.center,
+              children: entries.asMap().entries.map((entry) {
+                final color = _palette[entry.key % _palette.length];
+                return _Legend(
+                    color: color,
+                    label: entry.value.$1,
+                    value: fmtMoney(entry.value.$2));
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SpendBarChart extends StatelessWidget {
+  const _SpendBarChart({required this.daily, required this.period});
+  final List<DailySpend> daily;
+  final _SpendPeriod period;
+
+  @override
+  Widget build(BuildContext context) {
+    final bars = _aggregate(daily, period);
+    if (bars.isEmpty) {
+      return const SizedBox(
+        height: 120,
+        child: Center(child: Text('No spending data for this project.')),
+      );
+    }
+
+    final maxY = bars.fold<double>(0, (m, b) => b.$2 > m ? b.$2 : m);
+
+    return SizedBox(
+      height: 160,
+      child: BarChart(
+        BarChartData(
+          maxY: maxY * 1.25,
+          barGroups: bars.asMap().entries.map((e) {
+            return BarChartGroupData(
+              x: e.key,
+              barRods: [
+                BarChartRodData(
+                  toY: e.value.$2,
+                  color: Theme.of(context).colorScheme.primary,
+                  width: _barWidth(bars.length),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(3)),
+                ),
+              ],
+            );
+          }).toList(),
+          titlesData: FlTitlesData(
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 22,
+                getTitlesWidget: (v, _) {
+                  final i = v.toInt();
+                  if (i < 0 || i >= bars.length) {
+                    return const SizedBox.shrink();
+                  }
+                  // Only label every Nth bar to avoid crowding.
+                  final step = _labelStep(bars.length);
+                  if (i % step != 0) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(bars[i].$1,
+                        style: const TextStyle(fontSize: 8)),
+                  );
+                },
+              ),
+            ),
+            leftTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          borderData: FlBorderData(show: false),
+          gridData: const FlGridData(show: false),
+        ),
+      ),
+    );
+  }
+
+  double _barWidth(int count) {
+    if (count <= 10) return 14;
+    if (count <= 20) return 10;
+    return 6;
+  }
+
+  int _labelStep(int count) {
+    if (count <= 10) return 1;
+    if (count <= 20) return 2;
+    if (count <= 60) return 5;
+    return 10;
+  }
+}
+
+class _Legend extends StatelessWidget {
+  const _Legend({required this.color, required this.label, required this.value});
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+            width: 10,
+            height: 10,
+            decoration:
+                BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(width: 4),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            Text(value, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aggregation helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+List<(String label, double amount)> _aggregate(
+    List<DailySpend> data, _SpendPeriod period) {
+  if (data.isEmpty) return [];
+
+  if (period == _SpendPeriod.day) {
+    // Show last 30 days.
+    final cutoff = DateTime.now().toUtc().subtract(const Duration(days: 30));
+    return data
+        .where((d) => !d.date.isBefore(cutoff))
+        .map((d) => ('${d.date.day}/${d.date.month}', d.amount))
+        .toList();
+  }
+
+  if (period == _SpendPeriod.week) {
+    final byWeek = <String, double>{};
+    final weekLabel = <String, String>{};
+    for (final d in data) {
+      final monday = d.date.subtract(Duration(days: d.date.weekday - 1));
+      final key = '${monday.year}-${monday.month.toString().padLeft(2, '0')}'
+          '-${monday.day.toString().padLeft(2, '0')}';
+      byWeek[key] = (byWeek[key] ?? 0) + d.amount;
+      weekLabel[key] = '${monday.day}/${monday.month}';
+    }
+    final sorted = byWeek.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    return sorted.map((e) => (weekLabel[e.key]!, e.value)).toList();
+  }
+
+  // Month
+  const monthAbbr = [
+    '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+  final byMonth = <String, double>{};
+  for (final d in data) {
+    final key = '${d.date.year}-${d.date.month.toString().padLeft(2, '0')}';
+    byMonth[key] = (byMonth[key] ?? 0) + d.amount;
+  }
+  final sorted = byMonth.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+  return sorted.map((e) {
+    final parts = e.key.split('-');
+    final m = int.parse(parts[1]);
+    return ('${monthAbbr[m]} ${parts[0].substring(2)}', e.value);
+  }).toList();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Providers
+// ─────────────────────────────────────────────────────────────────────────────
+
 final _bvaProvider =
     FutureProvider.family<ProjectBva, String>((ref, projectId) async {
   ref.watch(ledgerVersionProvider);
   final ledger = await ref.watch(ledgerRepoProvider.future);
   return ledger.projectBva(projectId);
+});
+
+final _projectDailySpendProvider =
+    FutureProvider.family<List<DailySpend>, String>((ref, projectId) async {
+  ref.watch(ledgerVersionProvider);
+  final ledger = await ref.watch(ledgerRepoProvider.future);
+  return ledger.projectDailySpend(projectId);
 });

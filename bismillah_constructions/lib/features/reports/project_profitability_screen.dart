@@ -1,3 +1,4 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -120,6 +121,27 @@ class _ProjectProfitabilityScreenState
                 ),
               ),
               const SizedBox(height: 8),
+              // ── Net profit bar chart ───────────────────────────────────────
+              if (rows.isNotEmpty) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Net Profit per Project',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 12),
+                        _ProfitabilityChart(rows: rows),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               Text(
                 'Net = received − spent for With-Material projects, '
                 'and the booked service-fee income for Labour-Rate projects '
@@ -238,6 +260,80 @@ class _ProfitabilityRow {
     required this.spent,
     required this.net,
   });
+}
+
+class _ProfitabilityChart extends StatelessWidget {
+  const _ProfitabilityChart({required this.rows});
+  final List<_ProfitabilityRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxAbs = rows.fold<double>(0, (m, r) => r.net.abs() > m ? r.net.abs() : m);
+    if (maxAbs == 0) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 160,
+      child: BarChart(
+        BarChartData(
+          maxY: maxAbs * 1.25,
+          minY: -(maxAbs * 0.1),
+          barGroups: rows.asMap().entries.map((e) {
+            final net = e.value.net;
+            return BarChartGroupData(
+              x: e.key,
+              barRods: [
+                BarChartRodData(
+                  toY: net,
+                  color: net >= 0
+                      ? BalanceColors.positive(context)
+                      : BalanceColors.negative(context),
+                  width: _barWidth(rows.length),
+                  borderRadius: net >= 0
+                      ? const BorderRadius.vertical(top: Radius.circular(3))
+                      : const BorderRadius.vertical(bottom: Radius.circular(3)),
+                ),
+              ],
+            );
+          }).toList(),
+          titlesData: FlTitlesData(
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 28,
+                getTitlesWidget: (v, _) {
+                  final i = v.toInt();
+                  if (i < 0 || i >= rows.length) return const SizedBox.shrink();
+                  final name = rows[i].name;
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      name.length > 9 ? '${name.substring(0, 9)}…' : name,
+                      style: const TextStyle(fontSize: 8),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                },
+              ),
+            ),
+            leftTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          borderData: FlBorderData(show: false),
+          gridData: const FlGridData(show: false),
+        ),
+      ),
+    );
+  }
+
+  double _barWidth(int count) {
+    if (count <= 5) return 20;
+    if (count <= 10) return 14;
+    return 10;
+  }
 }
 
 /// Pulls every project (active or archived per [archived]) and asks the

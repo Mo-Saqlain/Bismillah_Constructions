@@ -48,6 +48,17 @@ class LedgerRepository {
     return v;
   }
 
+  // -------------------- Validation helpers --------------------
+
+  /// Throws [ArgumentError] if [value] is null or blank. Used to catch
+  /// programming mistakes where a required FK field is passed as an empty
+  /// string instead of a valid UUID.
+  static void _assertNonEmpty(String? value, String fieldName) {
+    if (value == null || value.trim().isEmpty) {
+      throw ArgumentError('$fieldName must not be null or empty.');
+    }
+  }
+
   // -------------------- Posting helpers --------------------
 
   Future<String> _post({
@@ -109,15 +120,18 @@ class LedgerRepository {
     required String projectId,
     required String supplierId,
     String? description,
-  }) =>
-      _post(
-        debitAccount: Accounts.materialCosts,
-        creditAccount: Accounts.supplierPayables,
-        amount: amount,
-        projectId: projectId,
-        supplierId: supplierId,
-        description: description,
-      );
+  }) {
+    _assertNonEmpty(projectId, 'projectId');
+    _assertNonEmpty(supplierId, 'supplierId');
+    return _post(
+      debitAccount: Accounts.materialCosts,
+      creditAccount: Accounts.supplierPayables,
+      amount: amount,
+      projectId: projectId,
+      supplierId: supplierId,
+      description: description,
+    );
+  }
 
   Future<String> postLabourPayment({
     required double amount,
@@ -126,6 +140,8 @@ class LedgerRepository {
     required Account paidFrom,
     String? description,
   }) async {
+    _assertNonEmpty(projectId, 'projectId');
+    _assertNonEmpty(supplierId, 'supplierId');
     await _assertCashLike(paidFrom);
     return _post(
       debitAccount: Accounts.labourCosts,
@@ -148,15 +164,18 @@ class LedgerRepository {
     required String projectId,
     required String supplierId,
     String? description,
-  }) =>
-      _post(
-        debitAccount: Accounts.labourCosts,
-        creditAccount: Accounts.supplierPayables,
-        amount: amount,
-        projectId: projectId,
-        supplierId: supplierId,
-        description: description,
-      );
+  }) {
+    _assertNonEmpty(projectId, 'projectId');
+    _assertNonEmpty(supplierId, 'supplierId');
+    return _post(
+      debitAccount: Accounts.labourCosts,
+      creditAccount: Accounts.supplierPayables,
+      amount: amount,
+      projectId: projectId,
+      supplierId: supplierId,
+      description: description,
+    );
+  }
 
   Future<String> postSupplierPay({
     required double amount,
@@ -165,6 +184,7 @@ class LedgerRepository {
     String? projectId,
     String? description,
   }) async {
+    _assertNonEmpty(supplierId, 'supplierId');
     await _assertCashLike(paidFrom);
     return _post(
       debitAccount: Accounts.supplierPayables,
@@ -186,6 +206,7 @@ class LedgerRepository {
     required Account receivedInto,
     String? description,
   }) async {
+    _assertNonEmpty(projectId, 'projectId');
     await _assertCashLike(receivedInto);
     return _post(
       debitAccount: receivedInto,
@@ -255,6 +276,7 @@ class LedgerRepository {
     required Account receivedInto,
     String? description,
   }) async {
+    _assertNonEmpty(projectId, 'projectId');
     await _assertCashLike(receivedInto);
     return _post(
       debitAccount: receivedInto,
@@ -897,14 +919,16 @@ class LedgerRepository {
     required String projectId,
     required double amount,
     String? description,
-  }) =>
-      _post(
-        debitAccount: Accounts.projectRevenue,
-        creditAccount: Accounts.serviceFeeIncome,
-        amount: amount,
-        projectId: projectId,
-        description: description ?? 'Service fee on project close',
-      );
+  }) {
+    _assertNonEmpty(projectId, 'projectId');
+    return _post(
+      debitAccount: Accounts.projectRevenue,
+      creditAccount: Accounts.serviceFeeIncome,
+      amount: amount,
+      projectId: projectId,
+      description: description ?? 'Service fee on project close',
+    );
+  }
 
   // -------------------- Aging Analysis --------------------
 
@@ -1320,6 +1344,51 @@ class LedgerRepository {
     return out;
   }
 
+  // -------------------- Daily Spend --------------------
+
+  /// Material + labour costs for a project grouped by calendar day (UTC date),
+  /// ordered oldest → newest. Covers the full project lifetime.
+  Future<List<DailySpend>> projectDailySpend(String projectId) async {
+    final rows = await _db.rawQuery(
+      'SELECT DATE(created_at) AS day, SUM(debit) AS total '
+      'FROM journal_entries '
+      'WHERE is_deleted = 0 AND project_id = ? '
+      'AND account_id IN (?, ?) AND debit > 0 '
+      'GROUP BY day ORDER BY day ASC',
+      [projectId, Accounts.materialCosts.id, Accounts.labourCosts.id],
+    );
+    return rows
+        .map((r) => DailySpend(
+              date: DateTime.parse(r['day'] as String),
+              amount: (r['total'] as num).toDouble(),
+            ))
+        .toList();
+  }
+
+  /// Material + labour costs across ALL projects grouped by calendar day (UTC),
+  /// covering the last [daysBack] days. Used by the dashboard spending strip.
+  Future<List<DailySpend>> overallDailySpend({int daysBack = 7}) async {
+    final cutoff = DateTime.now()
+        .toUtc()
+        .subtract(Duration(days: daysBack))
+        .toIso8601String();
+    final rows = await _db.rawQuery(
+      'SELECT DATE(created_at) AS day, SUM(debit) AS total '
+      'FROM journal_entries '
+      'WHERE is_deleted = 0 '
+      'AND account_id IN (?, ?) AND debit > 0 '
+      'AND created_at >= ? '
+      'GROUP BY day ORDER BY day ASC',
+      [Accounts.materialCosts.id, Accounts.labourCosts.id, cutoff],
+    );
+    return rows
+        .map((r) => DailySpend(
+              date: DateTime.parse(r['day'] as String),
+              amount: (r['total'] as num).toDouble(),
+            ))
+        .toList();
+  }
+
   // -------------------- Sync helpers --------------------
 
   Future<List<JournalEntry>> unsyncedEntries() async {
@@ -1423,6 +1492,12 @@ class BurnPoint {
   final DateTime date;
   final double cumulativeSpend;
   const BurnPoint({required this.date, required this.cumulativeSpend});
+}
+
+class DailySpend {
+  final DateTime date;
+  final double amount;
+  const DailySpend({required this.date, required this.amount});
 }
 
 class _OpenInvoice {

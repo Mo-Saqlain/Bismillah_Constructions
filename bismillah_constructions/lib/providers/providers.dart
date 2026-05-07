@@ -213,6 +213,13 @@ final allEntriesIncludingDeletedProvider =
   return repo.allEntries(includeDeleted: true);
 });
 
+final overallDailySpendProvider =
+    FutureProvider<List<DailySpend>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(ledgerRepoProvider.future);
+  return repo.overallDailySpend(daysBack: 7);
+});
+
 final changeLogProvider = FutureProvider<List<ChangeLog>>((ref) async {
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);

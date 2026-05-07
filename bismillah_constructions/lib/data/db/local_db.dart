@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 10);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 11);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 10,
+        version: 11,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -149,8 +149,8 @@ class LocalDb {
         id TEXT PRIMARY KEY,
         transaction_id TEXT NOT NULL,
         account_id TEXT NOT NULL,
-        project_id TEXT,
-        supplier_id TEXT,
+        project_id TEXT REFERENCES projects(id),
+        supplier_id TEXT REFERENCES suppliers(id),
         customer_id TEXT,
         debit REAL NOT NULL DEFAULT 0,
         credit REAL NOT NULL DEFAULT 0,
@@ -399,6 +399,69 @@ class LocalDb {
           created_at TEXT NOT NULL
         )
       ''');
+    }
+
+    if (oldVersion < 11) {
+      // v11: add REFERENCES constraints to journal_entries.project_id and
+      // journal_entries.supplier_id so the DB enforces referential integrity.
+      //
+      // SQLite cannot ADD CONSTRAINT to an existing table, so we:
+      //   1. Null out any orphaned references (safety net for any historical
+      //      hard-deletes of projects / suppliers).
+      //   2. Recreate the table with the FK declarations.
+      //   3. Copy all rows across and rebuild indexes.
+      //
+      // sqflite wraps _onUpgrade in a SQLite transaction on Android/iOS, so
+      // a failure here rolls back automatically and leaves the DB at v10.
+      await db.rawUpdate('''
+        UPDATE journal_entries
+        SET project_id = NULL
+        WHERE project_id IS NOT NULL
+          AND project_id NOT IN (SELECT id FROM projects)
+      ''');
+      await db.rawUpdate('''
+        UPDATE journal_entries
+        SET supplier_id = NULL
+        WHERE supplier_id IS NOT NULL
+          AND supplier_id NOT IN (SELECT id FROM suppliers)
+      ''');
+      await db.execute('''
+        CREATE TABLE journal_entries_v11 (
+          id TEXT PRIMARY KEY,
+          transaction_id TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          project_id TEXT REFERENCES projects(id),
+          supplier_id TEXT REFERENCES suppliers(id),
+          customer_id TEXT,
+          debit REAL NOT NULL DEFAULT 0,
+          credit REAL NOT NULL DEFAULT 0,
+          description TEXT,
+          created_at TEXT NOT NULL,
+          synced INTEGER NOT NULL DEFAULT 0,
+          is_deleted INTEGER NOT NULL DEFAULT 0,
+          deleted_at TEXT
+        )
+      ''');
+      await db.execute(
+          'INSERT INTO journal_entries_v11 SELECT * FROM journal_entries');
+      await db.execute('DROP TABLE journal_entries');
+      await db.execute(
+          'ALTER TABLE journal_entries_v11 RENAME TO journal_entries');
+      // Rebuild all indexes that existed on the old table.
+      await db.execute(
+          'CREATE INDEX idx_je_txn ON journal_entries(transaction_id)');
+      await db.execute(
+          'CREATE INDEX idx_je_account ON journal_entries(account_id)');
+      await db.execute(
+          'CREATE INDEX idx_je_project ON journal_entries(project_id)');
+      await db.execute(
+          'CREATE INDEX idx_je_supplier ON journal_entries(supplier_id)');
+      await db.execute(
+          'CREATE INDEX idx_je_customer ON journal_entries(customer_id)');
+      await db.execute(
+          'CREATE INDEX idx_je_synced ON journal_entries(synced)');
+      await db.execute(
+          'CREATE INDEX idx_je_deleted ON journal_entries(is_deleted)');
     }
 
     if (oldVersion < 3) {

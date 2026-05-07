@@ -37,6 +37,9 @@ dependencies:
   printing: ^5.13.0
   share_plus: ^9.0.0
 
+  # Charts
+  fl_chart: ^0.68.0
+
   # Backup file picker (import .db file)
   file_picker: ^8.0.7
 

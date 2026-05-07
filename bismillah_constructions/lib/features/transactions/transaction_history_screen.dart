@@ -23,8 +23,6 @@ class _TransactionHistoryScreenState
   DateTime? _from;
   DateTime? _to;
 
-  /// True when [r.createdAt] (in local time) falls inside the selected
-  /// `[_from, _to]` window. Both bounds are optional and inclusive.
   bool _inWindow(JournalEntry r) {
     final created = r.createdAt.toLocal();
     if (_from != null) {
@@ -32,8 +30,8 @@ class _TransactionHistoryScreenState
       if (created.isBefore(start)) return false;
     }
     if (_to != null) {
-      final endExclusive = DateTime(_to!.year, _to!.month, _to!.day)
-          .add(const Duration(days: 1));
+      final endExclusive =
+          DateTime(_to!.year, _to!.month, _to!.day).add(const Duration(days: 1));
       if (!created.isBefore(endExclusive)) return false;
     }
     return true;
@@ -51,8 +49,7 @@ class _TransactionHistoryScreenState
         actions: [
           Row(
             children: [
-              const Text('Show deleted',
-                  style: TextStyle(fontSize: 13)),
+              const Text('Show deleted', style: TextStyle(fontSize: 13)),
               Switch(
                 value: _showDeleted,
                 onChanged: (v) => setState(() => _showDeleted = v),
@@ -93,119 +90,164 @@ class _TransactionHistoryScreenState
                     ),
                   );
                 }
-                // Group both legs of every transaction together so the card
-                // can render the Dr/Cr pair on one tile.
+
+                // Group both legs by transaction id.
                 final pairs = <String, List<JournalEntry>>{};
                 for (final r in filtered) {
                   (pairs[r.transactionId] ??= []).add(r);
                 }
                 final txnIds = pairs.keys.toList();
 
-                return ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: txnIds.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final pair = pairs[txnIds[i]]!;
-              if (pair.length != 2) return const SizedBox.shrink();
-              final dr = pair.firstWhere((e) => e.debit > 0);
-              final cr = pair.firstWhere((e) => e.credit > 0);
-              final isDeleted = dr.deleted;
+                // Build flat item list with date headers.
+                // String items = date headers; List<JournalEntry> = txn pairs.
+                final items = <Object>[];
+                String? lastDate;
+                for (final txnId in txnIds) {
+                  final pair = pairs[txnId]!;
+                  if (pair.isEmpty) continue;
+                  final localDate = pair.first.createdAt.toLocal();
+                  final dateStr = fmtDate(localDate);
+                  if (dateStr != lastDate) {
+                    items.add(dateStr);
+                    lastDate = dateStr;
+                  }
+                  items.add(pair);
+                }
 
-              return Card(
-                color: isDeleted
-                    ? Theme.of(context)
-                        .colorScheme
-                        .errorContainer
-                        .withValues(alpha: 0.18)
-                    : null,
-                child: InkWell(
-                  onTap: () =>
-                      _showActions(context, ref, dr.transactionId, isDeleted),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              fmtMoney(dr.debit),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                      color: isDeleted
-                                          ? BalanceColors.negative(context)
-                                          : null,
+                return ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) {
+                    final item = items[i];
+
+                    if (item is String) {
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(4, i == 0 ? 4 : 16, 4, 8),
+                        child: Text(
+                          item,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                              ),
+                        ),
+                      );
+                    }
+
+                    final pair = item as List<JournalEntry>;
+                    if (pair.length != 2) return const SizedBox.shrink();
+                    final dr = pair.firstWhere((e) => e.debit > 0);
+                    final cr = pair.firstWhere((e) => e.credit > 0);
+                    final isDeleted = dr.deleted;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Card(
+                        color: isDeleted
+                            ? Theme.of(context)
+                                .colorScheme
+                                .errorContainer
+                                .withValues(alpha: 0.18)
+                            : null,
+                        child: InkWell(
+                          onTap: () => _showActions(
+                              context, ref, dr.transactionId, isDeleted),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      fmtMoney(dr.debit),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color: isDeleted
+                                                  ? BalanceColors.negative(
+                                                      context)
+                                                  : null,
+                                              decoration: isDeleted
+                                                  ? TextDecoration.lineThrough
+                                                  : null),
+                                    ),
+                                    Row(
+                                      children: [
+                                        if (isDeleted)
+                                          const Padding(
+                                            padding:
+                                                EdgeInsets.only(right: 6),
+                                            child: Text('DELETED',
+                                                style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight:
+                                                        FontWeight.w800)),
+                                          ),
+                                        if (dr.synced == 0 && !isDeleted)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                right: 6),
+                                            child: Icon(Icons.sync,
+                                                size: 14,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .secondary),
+                                          ),
+                                        Text(fmtDateTime(dr.createdAt),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall),
+                                        const SizedBox(width: 4),
+                                        Icon(Icons.more_vert,
+                                            size: 16,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text('Dr  ${Accounts.byId(dr.accountId).name}',
+                                    style: TextStyle(
                                       decoration: isDeleted
                                           ? TextDecoration.lineThrough
-                                          : null),
-                            ),
-                            Row(
-                              children: [
-                                if (isDeleted)
-                                  const Padding(
-                                    padding: EdgeInsets.only(right: 6),
-                                    child: Text('DELETED',
-                                        style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w800)),
-                                  ),
-                                if (dr.synced == 0 && !isDeleted)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 6),
-                                    child: Icon(Icons.sync,
-                                        size: 14,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .secondary),
-                                  ),
-                                Text(fmtDateTime(dr.createdAt),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall),
-                                const SizedBox(width: 4),
-                                Icon(Icons.more_vert,
-                                    size: 16,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant),
+                                          : null,
+                                    )),
+                                Text(
+                                    '     Cr  ${Accounts.byId(cr.accountId).name}',
+                                    style: TextStyle(
+                                      decoration: isDeleted
+                                          ? TextDecoration.lineThrough
+                                          : null,
+                                    )),
+                                if (dr.description != null &&
+                                    dr.description!.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(dr.description!,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall),
+                                ],
                               ],
                             ),
-                          ],
+                          ),
                         ),
-                        const SizedBox(height: 6),
-                        Text('Dr  ${Accounts.byId(dr.accountId).name}',
-                            style: TextStyle(
-                              decoration: isDeleted
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                            )),
-                        Text('     Cr  ${Accounts.byId(cr.accountId).name}',
-                            style: TextStyle(
-                              decoration: isDeleted
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                            )),
-                        if (dr.description != null &&
-                            dr.description!.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(dr.description!,
-                              style: Theme.of(context).textTheme.bodySmall),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
+                      ),
+                    );
+                  },
+                );
+              },
             ),
+          ),
         ],
       ),
     );
