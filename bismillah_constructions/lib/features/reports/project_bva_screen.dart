@@ -446,58 +446,120 @@ class _SpendBarChart extends StatelessWidget {
     }
 
     final maxY = bars.fold<double>(0, (m, b) => b.$2 > m ? b.$2 : m);
+    final periodLabel = switch (period) {
+      _SpendPeriod.day => 'per day',
+      _SpendPeriod.week => 'per week',
+      _SpendPeriod.month => 'per month',
+    };
 
-    return SizedBox(
-      height: 160,
-      child: BarChart(
-        BarChartData(
-          maxY: maxY * 1.25,
-          barGroups: bars.asMap().entries.map((e) {
-            return BarChartGroupData(
-              x: e.key,
-              barRods: [
-                BarChartRodData(
-                  toY: e.value.$2,
-                  color: Theme.of(context).colorScheme.primary,
-                  width: _barWidth(bars.length),
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(3)),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Material + Labour spend, $periodLabel',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 180,
+          child: BarChart(
+            BarChartData(
+              maxY: maxY * 1.25,
+              barGroups: bars.asMap().entries.map((e) {
+                return BarChartGroupData(
+                  x: e.key,
+                  barRods: [
+                    BarChartRodData(
+                      toY: e.value.$2,
+                      color: Theme.of(context).colorScheme.primary,
+                      width: _barWidth(bars.length),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(3)),
+                    ),
+                  ],
+                );
+              }).toList(),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  axisNameWidget: Text(
+                    switch (period) {
+                      _SpendPeriod.day => 'Date',
+                      _SpendPeriod.week => 'Week starting',
+                      _SpendPeriod.month => 'Month',
+                    },
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  axisNameSize: 16,
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 22,
+                    getTitlesWidget: (v, _) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= bars.length) {
+                        return const SizedBox.shrink();
+                      }
+                      final step = _labelStep(bars.length);
+                      if (i % step != 0) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(bars[i].$1,
+                            style: const TextStyle(fontSize: 9)),
+                      );
+                    },
+                  ),
                 ),
-              ],
-            );
-          }).toList(),
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 22,
-                getTitlesWidget: (v, _) {
-                  final i = v.toInt();
-                  if (i < 0 || i >= bars.length) {
-                    return const SizedBox.shrink();
-                  }
-                  // Only label every Nth bar to avoid crowding.
-                  final step = _labelStep(bars.length);
-                  if (i % step != 0) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(bars[i].$1,
-                        style: const TextStyle(fontSize: 8)),
-                  );
-                },
+                leftTitles: AxisTitles(
+                  axisNameWidget: Text('Spend',
+                      style: Theme.of(context).textTheme.labelSmall),
+                  axisNameSize: 14,
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 48,
+                    interval: _yAxisInterval(maxY),
+                    getTitlesWidget: (v, _) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        fmtCompactMoney(v),
+                        style: const TextStyle(fontSize: 9),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+              ),
+              borderData: FlBorderData(show: false),
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: _yAxisInterval(maxY),
+                getDrawingHorizontalLine: (_) => FlLine(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .outlineVariant
+                      .withValues(alpha: 0.4),
+                  strokeWidth: 1,
+                ),
+              ),
+              barTouchData: BarTouchData(
+                enabled: true,
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipItem: (group, _, rod, _) => BarTooltipItem(
+                    '${bars[group.x].$1}\n${fmtMoney(rod.toY)}',
+                    const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11),
+                  ),
+                ),
               ),
             ),
-            leftTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
-          borderData: FlBorderData(show: false),
-          gridData: const FlGridData(show: false),
         ),
-      ),
+      ],
     );
   }
 
@@ -512,6 +574,34 @@ class _SpendBarChart extends StatelessWidget {
     if (count <= 20) return 2;
     if (count <= 60) return 5;
     return 10;
+  }
+
+  /// Picks a "nice" interval (1 / 2 / 2.5 / 5 × 10^n) that keeps the chart
+  /// labelled with ~5 horizontal lines regardless of magnitude.
+  double _yAxisInterval(double maxY) {
+    if (maxY <= 0) return 1;
+    final raw = maxY / 4;
+    final mag = _magnitude(raw);
+    final norm = raw / mag;
+    final nice = norm < 1.5
+        ? 1.0
+        : norm < 3
+            ? 2.0
+            : norm < 7
+                ? 5.0
+                : 10.0;
+    return nice * mag;
+  }
+
+  double _magnitude(double v) {
+    var m = 1.0;
+    while (m * 10 <= v) {
+      m *= 10;
+    }
+    while (m > v && m > 1e-9) {
+      m /= 10;
+    }
+    return m;
   }
 }
 

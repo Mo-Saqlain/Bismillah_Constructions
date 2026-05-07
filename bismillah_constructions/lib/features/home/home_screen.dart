@@ -13,17 +13,29 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  /// 0 is the Home (Dashboard) tab. The PopScope below treats it as the
-  /// "root" — back from any other tab snaps here instead of exiting the app.
+  /// Order: Home, Manage, Reports, Settings.
   static const _homeIndex = 0;
   int _index = _homeIndex;
 
   late final PageController _pageController =
       PageController(initialPage: _homeIndex);
 
-  // 4 destinations in order: Home, Manage, Reports, Settings.
-  // Projects, Suppliers, Banks/Wallets and Material Types all live inside
-  // the Manage tab so the bottom bar stays at four slots.
+  /// Visited-tab history with the current tab at the tail. Capped at 4
+  /// entries — pushing a 5th drops the oldest. Back press pops the tail
+  /// and navigates to the new tail. When only Home remains, back exits.
+  static const int _historyCapacity = 4;
+  final List<int> _history = [_homeIndex];
+
+  /// Set true when we're driving a tab change from a back press, so the
+  /// resulting [PageController] page-change callback does not re-record the
+  /// transition into history.
+  bool _navigatingBack = false;
+
+  /// While doing a multi-step jump (silent jump-to-adjacent + animate),
+  /// this holds the final destination index. Intermediate page-change
+  /// notifications are ignored for history purposes until we land here.
+  int? _animatingToFinalIndex;
+
   static const _tabs = <Widget>[
     DashboardScreen(),
     ManageScreen(),
@@ -37,36 +49,106 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  /// Tab tap from the bottom NavigationBar.
+  ///
+  /// Adjacent jumps animate normally — a 240ms slide is fast and feels
+  /// natural. Non-adjacent jumps silently jump to the page right next to
+  /// the target, then animate that last step. The user sees exactly one
+  /// slide regardless of the distance — no "flash through the middle tabs"
+  /// like a raw [PageController.jumpToPage] would produce.
   void _goToTab(int i) {
     if (i == _index) return;
-    _pageController.animateToPage(
-      i,
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeInOut,
-    );
+    final diff = (i - _index).abs();
+    const dur = Duration(milliseconds: 240);
+
+    if (diff > 1) {
+      // Park one page short of the target, then animate the final hop.
+      final adjacent = i > _index ? i - 1 : i + 1;
+      _animatingToFinalIndex = i;
+      _pageController.jumpToPage(adjacent);
+      // Schedule the animation after the jump's frame settles, otherwise
+      // they collide and PageController falls back to an instant jump.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _pageController.animateToPage(i,
+            duration: dur, curve: Curves.easeInOut);
+      });
+    } else {
+      _pageController.animateToPage(i,
+          duration: dur, curve: Curves.easeInOut);
+    }
+  }
+
+  void _onPageChanged(int newIndex) {
+    setState(() => _index = newIndex);
+    if (_navigatingBack) {
+      _navigatingBack = false;
+      return;
+    }
+    // Mid-flight intermediate page from a multi-step jump — don't record
+    // it; we're still on our way to the real destination.
+    if (_animatingToFinalIndex != null &&
+        newIndex != _animatingToFinalIndex) {
+      return;
+    }
+    _animatingToFinalIndex = null;
+    // Skip recording a no-op transition (e.g. settling animation reporting
+    // the same page twice).
+    if (_history.isNotEmpty && _history.last == newIndex) return;
+    _history.add(newIndex);
+    if (_history.length > _historyCapacity) {
+      _history.removeAt(0);
+    }
+  }
+
+  /// Returns true if we handled the back gesture by navigating within the
+  /// tab history. Returns false to let the system pop happen (which exits
+  /// the app from Home).
+  bool _handleBack() {
+    if (_history.length <= 1) {
+      // Only the current tab is left in history. If it's Home, let the
+      // pop go through (system exits). If we're somehow on a non-Home
+      // tab with no history, fall back to Home rather than exiting.
+      if (_index != _homeIndex) {
+        _navigatingBack = true;
+        _history
+          ..clear()
+          ..add(_homeIndex);
+        _pageController.jumpToPage(_homeIndex);
+        return true;
+      }
+      return false;
+    }
+
+    // Pop the current tab from history; the new tail is the destination.
+    _history.removeLast();
+    final destination = _history.last;
+    _navigatingBack = true;
+    if ((destination - _index).abs() > 1) {
+      _pageController.jumpToPage(destination);
+    } else {
+      _pageController.animateToPage(
+        destination,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeInOut,
+      );
+    }
+    return true;
   }
 
   @override
   Widget build(BuildContext context) {
-    final onHome = _index == _homeIndex;
-    // PopScope intercepts the system back gesture (Android hardware
-    // button, swipe-back, etc.). When the user is on a non-Home tab
-    // we swallow the pop and switch to the Home tab so they don't
-    // accidentally drop out of the app from Settings/Manage/Reports.
-    // On the Home tab we let the pop go through (which exits the app).
+    final canExit = _index == _homeIndex && _history.length <= 1;
     return PopScope(
-      canPop: onHome,
+      canPop: canExit,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (!onHome) _goToTab(_homeIndex);
+        _handleBack();
       },
       child: Scaffold(
         body: PageView(
           controller: _pageController,
-          // Default PageScrollPhysics enables horizontal swipe between tabs.
-          // A pushed sub-screen (e.g. tapping a tile) lives on the root
-          // Navigator above this PageView, so its swipes do not affect tabs.
-          onPageChanged: (i) => setState(() => _index = i),
+          onPageChanged: _onPageChanged,
           children: _tabs.map((w) => _KeepAlivePage(child: w)).toList(),
         ),
         bottomNavigationBar: NavigationBar(
@@ -96,10 +178,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// Wraps a tab page in an [AutomaticKeepAliveClientMixin] state so PageView
-/// doesn't rebuild it when the user swipes away — this preserves scroll
-/// position, form input, etc. across tab transitions, matching the previous
-/// IndexedStack behaviour.
+/// Wraps a tab page in [AutomaticKeepAliveClientMixin] so PageView does not
+/// rebuild it when the user swipes away — preserves scroll position, form
+/// input, etc. across tab transitions.
 class _KeepAlivePage extends StatefulWidget {
   const _KeepAlivePage({required this.child});
   final Widget child;

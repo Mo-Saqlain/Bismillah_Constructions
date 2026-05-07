@@ -94,6 +94,30 @@ class DashboardScreen extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  if (s.projectsAtRisk.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _ProjectsAtRiskCard(risks: s.projectsAtRisk),
+                  ],
+                  if (s.customerDeposits > 0) ...[
+                    const SizedBox(height: 8),
+                    Card(
+                      color: Colors.orange.shade700.withValues(alpha: 0.10),
+                      child: ListTile(
+                        leading: Icon(Icons.savings_outlined,
+                            color: Colors.orange.shade800),
+                        title: Text('Customer Deposits (owed back)',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.orange.shade800)),
+                        subtitle: const Text(
+                            'Money received from customers that hasn’t yet been earned through cost-incurred work.'),
+                        trailing: Text(fmtMoney(s.customerDeposits),
+                            style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: Colors.orange.shade800)),
+                      ),
+                    ),
+                  ],
                   if (s.counterReceivables > 0 || s.counterPayables > 0) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -189,6 +213,91 @@ class DashboardScreen extends ConsumerWidget {
                 );
               },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Projects at Risk card — loss-warning panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ProjectsAtRiskCard extends StatelessWidget {
+  const _ProjectsAtRiskCard({required this.risks});
+  final List<ProjectAtRisk> risks;
+
+  @override
+  Widget build(BuildContext context) {
+    final overCount = risks.where((r) => r.isOverBudget).length;
+    final warnCount = risks.length - overCount;
+    final headlineColor = overCount > 0
+        ? BalanceColors.negative(context)
+        : Colors.orange.shade800;
+
+    return Card(
+      color: (overCount > 0
+              ? BalanceColors.negative(context)
+              : Colors.orange.shade700)
+          .withValues(alpha: 0.10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                    overCount > 0
+                        ? Icons.error_outline
+                        : Icons.warning_amber_outlined,
+                    color: headlineColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    overCount > 0
+                        ? 'Projects at risk — $overCount over budget'
+                            '${warnCount > 0 ? ', $warnCount approaching' : ''}'
+                        : '$warnCount project(s) approaching budget',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700, color: headlineColor),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            for (final r in risks.take(4))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(r.projectName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                    Text(
+                      r.isOverBudget
+                          ? 'over by ${fmtMoney(r.costsToDate - r.budget)}'
+                          : '${r.pctConsumed.toStringAsFixed(0)}% used',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: r.isOverBudget
+                              ? BalanceColors.negative(context)
+                              : Colors.orange.shade800),
+                    ),
+                  ],
+                ),
+              ),
+            if (risks.length > 4)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('+ ${risks.length - 4} more',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
           ],
         ),
       ),
@@ -330,8 +439,11 @@ class _DailySpendCard extends StatelessWidget {
                       barRods: [
                         BarChartRodData(
                           toY: e.value.amount,
+                          // Peak bar uses the tertiary accent rather than
+                          // red — red is reserved strictly for negative
+                          // financial values per the design spec.
                           color: e.value.amount == maxY
-                              ? Colors.red.shade400
+                              ? Theme.of(context).colorScheme.tertiary
                               : Theme.of(context).colorScheme.primary,
                           width: 22,
                           borderRadius: const BorderRadius.vertical(

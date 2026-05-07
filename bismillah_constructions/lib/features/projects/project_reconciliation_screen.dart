@@ -111,16 +111,94 @@ class _ProjectReconciliationScreenState
             content: Text('Project archived (data preserved).')));
         Navigator.pop(context);
       }
+    } on ProjectBudgetMismatchException catch (e) {
+      // The customer paid less than budget. Offer to resize the contract
+      // to match received before retrying the archive.
+      if (!mounted) return;
+      setState(() => _busy = false);
+      await _handleBudgetMismatch(e);
     } on ReconciliationException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
-                'Archive blocked — ${fmtSignedMoney(e.netLedger)} of ledger net + ${fmtSignedMoney(e.outstandingPayables)} of supplier payables still open.')));
+                'Archive blocked — ${fmtSignedMoney(e.outstandingPayables)} of supplier payables still open.')));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _handleBudgetMismatch(
+      ProjectBudgetMismatchException e) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.compare_arrows,
+            color: Theme.of(ctx).colorScheme.primary, size: 36),
+        title: const Text('Customer paid less than budget'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Original budget:  ${fmtMoney(e.budget)}'),
+            const SizedBox(height: 4),
+            Text('Total received:   ${fmtMoney(e.received)}'),
+            const SizedBox(height: 4),
+            Text('Shortfall:        ${fmtMoney(e.shortfall)}',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: BalanceColors.negative(context))),
+            const SizedBox(height: 12),
+            const Text(
+                'To close this project, the contract value should match what '
+                'was actually received. Resize the budget to ${"​"}'
+                'the received amount and archive?'),
+            const SizedBox(height: 8),
+            Text(
+                'If you expect more money to come in, cancel and record '
+                'the remaining payment first.',
+                style: Theme.of(ctx).textTheme.bodySmall),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Set budget to ${fmtMoney(e.received)}')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _busy = true);
+    try {
+      final entityRepo = await ref.read(entityRepoProvider.future);
+      await entityRepo.updateProjectFields(
+        widget.project.id,
+        budget: e.received,
+      );
+      await entityRepo.archiveProject(
+        widget.project.id,
+        note: 'Budget resized to match received and archived',
+      );
+      bumpLedger(ref);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text('Budget adjusted and project archived.')));
+        Navigator.pop(context);
+      }
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed: $err')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

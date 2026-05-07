@@ -140,18 +140,20 @@ class EntityRepository {
 
   /// Soft-archive: preserves data, removes from active lists. Logged.
   ///
-  /// **All projects are gated** by the project ledger balance: every cost
-  /// posted against the project must be cancelled by an equivalent inflow
-  /// (project revenue + service-fee income) before the project can be
-  /// archived. Suppliers tied to the project must also be settled
-  /// (no outstanding payable). For Labour-Rate projects, the
-  /// reconciliation screen posts the service-fee reclassification first;
-  /// the user then has to record the refund or collection so the ledger
-  /// nets to zero.
+  /// **Gate**: every supplier owed money on this project must be settled
+  /// (`supplierPayables == 0`). The previous design also forced
+  /// `ledgerNet == 0` (total costs = total revenue), but that requirement
+  /// is wrong for fixed-price With-Material contracts — the contractor's
+  /// **profit** is the gap between revenue and costs, so insisting it be
+  /// zero would mean refunding the profit before close. The PoC revenue
+  /// recognition + loss-provision logic in
+  /// [LedgerRepository.incomeFigures] already surfaces over-budget jobs
+  /// and unearned customer deposits, so the user has visibility without
+  /// the archive being blocked.
   ///
-  /// Throws [ReconciliationException] when the gate fails.
+  /// Throws [ReconciliationException] when supplier payables are open.
   ///
-  /// Pass `force: true` to bypass the gate — only used for migrations or
+  /// Pass `force: true` to bypass — only used for migrations or
   /// data-repair flows.
   Future<void> archiveProject(String id,
       {String? note, bool force = false}) async {
@@ -160,11 +162,26 @@ class EntityRepository {
 
     if (!force) {
       final balance = await _projectLedgerBalance(id);
-      if (balance.isOutOfBalance) {
+      if (balance.supplierPayables.abs() >= 0.01) {
         throw ReconciliationException(
           projectId: id,
           outstandingPayables: balance.supplierPayables,
           netLedger: balance.ledgerNet,
+        );
+      }
+
+      // With-Material gate: if the customer has paid less than budget, the
+      // user has to either record the remaining payment or shrink the
+      // budget to match what was actually received. Overpayments
+      // (received > budget) are allowed through — the excess is already
+      // surfaced as a "deposit owed back" liability.
+      if (p.model == ProjectModel.withMaterial &&
+          (p.budget ?? 0) > 0 &&
+          balance.received + 0.01 < (p.budget ?? 0)) {
+        throw ProjectBudgetMismatchException(
+          projectId: id,
+          budget: p.budget!,
+          received: balance.received,
         );
       }
     }
@@ -231,6 +248,7 @@ class EntityRepository {
     return _ProjectLedgerBalance(
       supplierPayables: supplierPayables,
       ledgerNet: ledgerNet,
+      received: revenueCr,
     );
   }
 
@@ -875,9 +893,13 @@ class EntityRepository {
 class _ProjectLedgerBalance {
   final double supplierPayables;
   final double ledgerNet;
+  /// Total project revenue credits (sum of all "Received from project"
+  /// transactions, net of any service-fee reclassification).
+  final double received;
   const _ProjectLedgerBalance({
     required this.supplierPayables,
     required this.ledgerNet,
+    required this.received,
   });
 
   /// Gate fails when either side has not been zeroed out (1 paisa
@@ -902,6 +924,31 @@ class ReconciliationException implements Exception {
   @override
   String toString() => 'ReconciliationException(project=$projectId, '
       'outstandingPayables=$outstandingPayables, netLedger=$netLedger)';
+}
+
+/// Thrown when a With-Material project is being archived but the customer
+/// has paid less than the budget — i.e. there is still money outstanding
+/// or the contract value was effectively renegotiated downward. The UI
+/// catches this and offers to adjust the budget to match the received
+/// amount (resizing the contract) or cancel.
+///
+/// `received > budget` is **not** a mismatch for this purpose: the excess
+/// is already tracked as a refund-able customer deposit by the PoC logic
+/// in [LedgerRepository.incomeFigures], and archiving with that liability
+/// in place is the correct accounting outcome.
+class ProjectBudgetMismatchException implements Exception {
+  final String projectId;
+  final double budget;
+  final double received;
+  const ProjectBudgetMismatchException({
+    required this.projectId,
+    required this.budget,
+    required this.received,
+  });
+  double get shortfall => budget - received;
+  @override
+  String toString() => 'ProjectBudgetMismatchException(project=$projectId, '
+      'budget=$budget, received=$received)';
 }
 
 /// Thrown when an attempt is made to archive a supplier whose payable

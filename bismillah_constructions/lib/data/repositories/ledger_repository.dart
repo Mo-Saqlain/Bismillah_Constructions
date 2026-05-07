@@ -133,6 +133,14 @@ class LedgerRepository {
     );
   }
 
+  /// Pay a labour worker. If the worker already has wages on credit
+  /// (recorded earlier via [postLabourCredit]), this payment **settles the
+  /// outstanding payable first** rather than booking a brand-new cost. Only
+  /// any excess beyond what is owed becomes a new direct labour cost.
+  ///
+  /// Without this rule, paying a worker after recording their wages on
+  /// credit would double-count: Labour Costs would jump to 3000 and the
+  /// payable would still sit at 1500, when the user expects 1500/0.
   Future<String> postLabourPayment({
     required double amount,
     required String projectId,
@@ -143,6 +151,45 @@ class LedgerRepository {
     _assertNonEmpty(projectId, 'projectId');
     _assertNonEmpty(supplierId, 'supplierId');
     await _assertCashLike(paidFrom);
+
+    final owed = await supplierPayableBalance(supplierId);
+
+    // Full settlement: payment ≤ what we owe. One transaction settling the
+    // payable, no new cost (cost was booked at credit time).
+    if (owed >= amount - 0.01) {
+      return _post(
+        debitAccount: Accounts.supplierPayables,
+        creditAccount: paidFrom,
+        amount: amount,
+        projectId: projectId,
+        supplierId: supplierId,
+        description: description,
+      );
+    }
+
+    // Partial: settle the existing credit, then book the remainder as a
+    // fresh direct labour cost. Two posts under the same description so the
+    // ledger view shows a coherent payment.
+    if (owed > 0.01) {
+      await _post(
+        debitAccount: Accounts.supplierPayables,
+        creditAccount: paidFrom,
+        amount: owed,
+        projectId: projectId,
+        supplierId: supplierId,
+        description: description,
+      );
+      return _post(
+        debitAccount: Accounts.labourCosts,
+        creditAccount: paidFrom,
+        amount: amount - owed,
+        projectId: projectId,
+        supplierId: supplierId,
+        description: description,
+      );
+    }
+
+    // No outstanding credit — direct labour cost like before.
     return _post(
       debitAccount: Accounts.labourCosts,
       creditAccount: paidFrom,
@@ -151,6 +198,19 @@ class LedgerRepository {
       supplierId: supplierId,
       description: description,
     );
+  }
+
+  /// Net amount we currently owe a single supplier (credits − debits on
+  /// the Supplier Payables account, scoped to this supplier id). Positive
+  /// = we still owe them; zero = settled; negative = we overpaid.
+  Future<double> supplierPayableBalance(String supplierId) async {
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(SUM(credit), 0) - COALESCE(SUM(debit), 0) AS bal '
+      'FROM journal_entries '
+      'WHERE account_id = ? AND supplier_id = ? AND is_deleted = 0',
+      [Accounts.supplierPayables.id, supplierId],
+    );
+    return ((rows.first['bal'] as num?) ?? 0).toDouble();
   }
 
   /// Wages incurred but not yet paid. Posts Dr Labour Costs / Cr Supplier
@@ -731,6 +791,143 @@ class LedgerRepository {
       operatingOutflow: opOut,
       financingOutflow: finOut,
       otherNet: other,
+    );
+  }
+
+  /// Single source of truth for revenue / cost figures used by both the
+  /// Income Statement and the dashboard's Net Profit. Implements
+  /// **Percentage-of-Completion (cost-recovery variant)** so a project
+  /// payment received before the matching costs are incurred does **not**
+  /// inflate profit — it sits as a customer-deposit liability instead.
+  ///
+  /// Recognition rules:
+  ///   * **With-Material, in-progress** (not archived):
+  ///       revenue_recognized = min(received, costs_to_date)
+  ///       deposit_owed       = max(received - costs_to_date, 0)
+  ///     i.e. cost-recovery — zero gross profit recognized until the project
+  ///     is closed. This is conservative and avoids "fake profit" from
+  ///     advance payments.
+  ///   * **With-Material, closed** (archived): the contract is delivered,
+  ///     so revenue = min(received, budget); any received over budget is a
+  ///     deposit owed back to the customer.
+  ///   * **Loss provision** (GAAP/IFRS rule): if costs exceed budget on any
+  ///     project (active or closed), the excess is recognized **immediately**
+  ///     as a separate cost line. Future losses must be booked the moment
+  ///     they become probable, not deferred.
+  ///   * **Labour-Rate**: unchanged — service fees are the only earned
+  ///     income; everything else received sits as a deposit.
+  ///
+  /// Returns [IncomeFigures] including a list of projects flagged as
+  /// at-risk (costs ≥ 80% of budget) so the UI can render loss warnings.
+  Future<IncomeFigures> incomeFigures({
+    DateTime? from,
+    DateTime? to,
+    String? projectId,
+  }) async {
+    // ── Load projects in scope ────────────────────────────────────────────
+    final projWhere = projectId != null ? 'WHERE id = ?' : '';
+    final projArgs = projectId != null ? <Object>[projectId] : <Object>[];
+    final projRows = await _db.rawQuery(
+      'SELECT id, name, model, budget, is_archived FROM projects $projWhere',
+      projArgs,
+    );
+
+    double wmRevenue = 0;
+    double wmDeposit = 0;
+    double matCosts = 0;
+    double labCosts = 0;
+    double lossProvision = 0;
+    double lrDeposit = 0;
+    final atRisk = <ProjectAtRisk>[];
+
+    for (final r in projRows) {
+      final pid = r['id'] as String;
+      final pname = (r['name'] as String?) ?? '';
+      final pmodel = (r['model'] as String?) ?? '';
+      final budget = (r['budget'] as num?)?.toDouble() ?? 0;
+      final closed = ((r['is_archived'] as int?) ?? 0) == 1;
+
+      final received = await creditBalance(Accounts.projectRevenue.id,
+          projectId: pid, from: from, to: to);
+      final mat = await accountBalance(Accounts.materialCosts.id,
+          projectId: pid, from: from, to: to);
+      final lab = await accountBalance(Accounts.labourCosts.id,
+          projectId: pid, from: from, to: to);
+      final costs = mat + lab;
+
+      matCosts += mat;
+      labCosts += lab;
+
+      if (pmodel == 'with_material') {
+        if (closed) {
+          // Project complete → recognize full contract.
+          if (budget > 0 && received > budget) {
+            wmRevenue += budget;
+            wmDeposit += received - budget;
+          } else {
+            wmRevenue += received;
+          }
+        } else {
+          // PoC cost-recovery: only recognize revenue matched by costs.
+          final recognized = received < costs ? received : costs;
+          wmRevenue += recognized;
+          if (received > recognized) wmDeposit += received - recognized;
+        }
+      } else {
+        // Labour-Rate — existing logic: residual after service-fee
+        // reclassification and customer-funded costs is deposit owed back.
+        final net = received - costs;
+        if (net > 0) lrDeposit += net;
+      }
+
+      // Loss provision — applies to every project model. If we've spent
+      // more on this job than the budget allows, the excess is a loss
+      // already in the bag, recognized immediately per FASB/IFRS.
+      if (budget > 0 && costs > budget) {
+        lossProvision += costs - budget;
+      }
+
+      // At-risk flag for the dashboard warning panel.
+      if (budget > 0 && costs > 0) {
+        final pct = costs / budget * 100;
+        if (pct >= 80) {
+          atRisk.add(ProjectAtRisk(
+            projectId: pid,
+            projectName: pname,
+            budget: budget,
+            costsToDate: costs,
+            pctConsumed: pct,
+            isOverBudget: costs > budget,
+          ));
+        }
+      }
+    }
+
+    // Service fees are project-tagged, but the existing code summed them
+    // globally when no project filter was active. Match that behaviour.
+    final serviceFees = await creditBalance(Accounts.serviceFeeIncome.id,
+        projectId: projectId, from: from, to: to);
+
+    final personalDraw = projectId == null
+        ? await accountBalance(Accounts.personalDraw.id, from: from, to: to)
+        : 0.0;
+
+    // Sort at-risk projects by severity (over-budget first, then by % consumed).
+    atRisk.sort((a, b) {
+      if (a.isOverBudget != b.isOverBudget) return a.isOverBudget ? -1 : 1;
+      return b.pctConsumed.compareTo(a.pctConsumed);
+    });
+
+    return IncomeFigures(
+      wmRevenue: wmRevenue,
+      serviceFees: serviceFees,
+      matCosts: matCosts,
+      labCosts: labCosts,
+      personalDraw: personalDraw,
+      lrDeposit: lrDeposit,
+      wmDeposit: wmDeposit,
+      lossProvision: lossProvision,
+      projectsAtRisk: atRisk,
     );
   }
 
@@ -1349,19 +1546,32 @@ class LedgerRepository {
   /// Average daily material + labour spend over the last [daysBack] days.
   /// Returns 0 when there is no spending history (avoids divide-by-zero at
   /// the call site).
+  /// Average burn rate over the last [daysBack] days, computed across the
+  /// **days that actually had cost activity** rather than all calendar days
+  /// in the window. This is the more common professional approach: it
+  /// reflects what you spend on a typical spending day, instead of getting
+  /// dragged toward zero by inactive days.
+  ///
+  /// Example: Rs 18,000 spent on a single day in the last 30 →
+  /// burn = 18,000 / 1 = Rs 18,000/day (was 600/day under the old
+  /// total ÷ 30 formula).
   Future<double> averageDailyExpense({int daysBack = 30}) async {
     final cutoff = DateTime.now()
         .toUtc()
         .subtract(Duration(days: daysBack))
         .toIso8601String();
     final rows = await _db.rawQuery(
-      'SELECT COALESCE(SUM(debit), 0) AS total FROM journal_entries '
+      'SELECT COALESCE(SUM(debit), 0) AS total, '
+      'COUNT(DISTINCT DATE(created_at)) AS days '
+      'FROM journal_entries '
       'WHERE is_deleted = 0 AND account_id IN (?, ?) AND debit > 0 '
       'AND created_at >= ?',
       [Accounts.materialCosts.id, Accounts.labourCosts.id, cutoff],
     );
     final total = ((rows.first['total'] as num?) ?? 0).toDouble();
-    return total / daysBack;
+    final activeDays = ((rows.first['days'] as num?) ?? 0).toInt();
+    if (activeDays == 0) return 0;
+    return total / activeDays;
   }
 
   // -------------------- Supplier-wise Spending --------------------
@@ -1462,6 +1672,66 @@ class MonthlyCashFlow {
   final Map<String, double> perAccount;
   const MonthlyCashFlow({required this.month, required this.perAccount});
   double get total => perAccount.values.fold(0, (a, b) => a + b);
+}
+
+/// Result of [LedgerRepository.incomeFigures]. Single source of truth for
+/// every "what's our P&L?" surface (Income Statement, dashboard Net Profit).
+class IncomeFigures {
+  /// Recognized contract revenue from With-Material projects, computed via
+  /// cost-recovery PoC for active jobs and full contract recognition for
+  /// closed jobs.
+  final double wmRevenue;
+  final double serviceFees;
+  final double matCosts;
+  final double labCosts;
+  final double personalDraw;
+  /// Customer money received but not yet earned — sits as a liability.
+  final double lrDeposit;
+  final double wmDeposit;
+  /// Sum of (costs - budget) across every project where costs exceeded
+  /// budget. Recognized as an immediate cost line per FASB/IFRS loss
+  /// provision rules.
+  final double lossProvision;
+  /// Projects whose cost-to-date is ≥ 80% of budget. Sorted with already-
+  /// over-budget jobs first, then by % consumed descending.
+  final List<ProjectAtRisk> projectsAtRisk;
+
+  const IncomeFigures({
+    required this.wmRevenue,
+    required this.serviceFees,
+    required this.matCosts,
+    required this.labCosts,
+    required this.personalDraw,
+    required this.lrDeposit,
+    required this.wmDeposit,
+    required this.lossProvision,
+    required this.projectsAtRisk,
+  });
+
+  double get totalIncome => wmRevenue + serviceFees;
+  double get totalCosts => matCosts + labCosts + personalDraw + lossProvision;
+  double get netProfit => totalIncome - totalCosts;
+  double get totalDeposit => lrDeposit + wmDeposit;
+}
+
+/// One project's risk snapshot for the dashboard's "Projects at Risk" panel.
+class ProjectAtRisk {
+  final String projectId;
+  final String projectName;
+  final double budget;
+  final double costsToDate;
+  /// 0..100+ — values above 100 mean already over budget.
+  final double pctConsumed;
+  final bool isOverBudget;
+
+  const ProjectAtRisk({
+    required this.projectId,
+    required this.projectName,
+    required this.budget,
+    required this.costsToDate,
+    required this.pctConsumed,
+    required this.isOverBudget,
+  });
 }
 
 /// Indirect-method cash flow summary across every cash-like account.

@@ -5,20 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_restart.dart';
 import '../../data/db/local_db.dart';
+import '../../data/services/backup_service.dart';
 import '../../providers/providers.dart';
 import '../home/home_screen.dart';
 
 /// Thin startup gate that sits in front of [HomeScreen].
 ///
-/// On Android the primary database now lives in external app-scoped storage
-/// (Bismillah_Data folder) which survives uninstall on most devices, so no
-/// "restore from backup?" dialog is needed.
+/// Backups live in external app-scoped storage (Bismillah_Backups folder)
+/// which survives app uninstall on most Android devices. So on a fresh
+/// install where the internal DB is empty, we **silently** copy the most
+/// recent backup over the internal DB — no dialog, no prompt.
 ///
-/// The only job of this widget is a one-time silent migration: if the external
-/// DB is still empty (first run after an app update or a device with no
-/// external storage fallback) AND the old internal database file has data,
-/// copy it to the new location before proceeding.  The user never sees a
-/// dialog — the app just opens.
+/// On every subsequent cold start the DB has data, so this gate just opens
+/// the DB and goes straight to HomeScreen. The user can still run a manual
+/// import from Settings → Import backup whenever they want.
 class RestoreGateway extends ConsumerStatefulWidget {
   const RestoreGateway({super.key});
 
@@ -28,6 +28,11 @@ class RestoreGateway extends ConsumerStatefulWidget {
 
 class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
   bool _ready = false;
+  // Static flag survives the restartApp() ProviderScope rebuild. We only
+  // ever attempt one silent auto-restore per app launch — if the backup file
+  // is bad and the DB is still empty after a copy, we proceed to HomeScreen
+  // rather than looping forever.
+  static bool _autoRestoreAttempted = false;
 
   @override
   void initState() {
@@ -37,7 +42,6 @@ class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
 
   Future<void> _startup() async {
     try {
-      // Open the DB (now from external persistent path on Android).
       final db = await ref.read(dbProvider.future);
 
       final projCount =
@@ -55,12 +59,18 @@ class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
         return;
       }
 
-      // External DB is empty. Check whether the old internal-storage DB has
-      // data that should be migrated silently (first run after update, or
-      // fallback path is the same as legacy path).
-      if (Platform.isAndroid) {
-        await _tryMigrateFromLegacy();
-        return; // either restartApp() or _ready = true happens inside
+      // DB is empty. If a backup exists AND we haven't already tried this
+      // launch, silently restore it before showing HomeScreen. The static
+      // flag survives the restartApp() ProviderScope rebuild so a broken
+      // backup never loops.
+      if (!_autoRestoreAttempted) {
+        _autoRestoreAttempted = true;
+        final backupPath =
+            await BackupService.findLatestBackupForAutoRestore();
+        if (backupPath != null) {
+          await _silentRestore(backupPath);
+          return; // restartApp() rebuilds the tree
+        }
       }
     } catch (_) {
       // Any error — just open HomeScreen with whatever data exists.
@@ -69,31 +79,19 @@ class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
     if (mounted) setState(() => _ready = true);
   }
 
-  Future<void> _tryMigrateFromLegacy() async {
+  Future<void> _silentRestore(String backupPath) async {
     try {
-      final oldPath = await LocalDb.legacyInternalPath();
-      final newPath = LocalDb.instance.dbPath;
-
-      // If paths are the same, external storage wasn't available and we fell
-      // back to the same directory — nothing to migrate.
-      if (newPath == null || newPath == oldPath) {
+      final dbPath = LocalDb.instance.dbPath;
+      if (dbPath == null) {
         if (mounted) setState(() => _ready = true);
         return;
       }
-
-      final oldFile = File(oldPath);
-      // Only migrate if the legacy file actually exists and has real content
-      // (empty SQLite headers are < 4 KB).
-      if (!await oldFile.exists() || await oldFile.length() < 4096) {
-        if (mounted) setState(() => _ready = true);
-        return;
-      }
-
-      // Close the empty external DB, copy the legacy file over it, reopen.
+      // Close the empty in-process DB so the file handle is released.
       await LocalDb.instance.reinitialize();
-      await oldFile.copy(newPath);
-      // Rebuild the entire ProviderScope so every provider reopens the
-      // newly-populated DB from scratch.
+      // Overwrite the empty DB file with the backup's content.
+      await File(backupPath).copy(dbPath);
+      // Trigger a full ProviderScope rebuild so every provider reopens the
+      // freshly restored file from scratch.
       restartApp();
     } catch (_) {
       if (mounted) setState(() => _ready = true);

@@ -1,18 +1,39 @@
 import 'package:flutter/material.dart';
 
+/// 60-30-10 colour distribution per design spec:
+/// - 60% neutral base (Cool Gray surfaces / Deep Navy in dark)
+/// - 30% structural blue (Deep Navy AppBar)
+/// - 10% action (Indigo CTAs + 3% semantic Emerald/Rose for finance only)
 ThemeData buildTheme({Brightness brightness = Brightness.light}) {
+  // Indigo seed drives the primary palette — every FilledButton / ElevatedButton
+  // / focus ring inherits from this. This is the "7%" of the 60-30-10 mix.
   final scheme = ColorScheme.fromSeed(
-    // Material Blue 800 — strong, professional, readable on white & dark.
-    seedColor: const Color(0xFF1565C0),
+    seedColor: const Color(0xFF3949AB), // Indigo 600
     brightness: brightness,
   );
+
+  // Structural Deep Navy — the "30%" reserved for the AppBar. Kept
+  // independent of the seed so the bar reads distinctly from indigo
+  // button accents. A slightly lighter shade is used in dark mode to
+  // avoid the eye-strain "wall of black-blue" effect.
+  const deepNavyLight = Color(0xFF1A237E); // Indigo 900
+  const deepNavyDark = Color(0xFF252F5C);  // mid-tone navy, easier on eyes
+
+  // Cool Gray scaffold for light mode (the "60%" whitespace). For dark
+  // mode we let Material 3 derive the scaffold from the seed
+  // (`scheme.surface`) — it produces a soft indigo-tinted dark gray that
+  // is comfortable for long sessions and still keeps the blue identity.
+  const coolGrayLight = Color(0xFFF5F5F7);
+
   return ThemeData(
     colorScheme: scheme,
     useMaterial3: true,
-    scaffoldBackgroundColor: scheme.surface,
+    scaffoldBackgroundColor:
+        brightness == Brightness.light ? coolGrayLight : scheme.surface,
     appBarTheme: AppBarTheme(
-      backgroundColor: scheme.primary,
-      foregroundColor: scheme.onPrimary,
+      backgroundColor:
+          brightness == Brightness.light ? deepNavyLight : deepNavyDark,
+      foregroundColor: Colors.white,
       elevation: 0,
       centerTitle: false,
     ),
@@ -35,25 +56,25 @@ ThemeData buildTheme({Brightness brightness = Brightness.light}) {
   );
 }
 
-/// High-contrast indicator colors per spec section 4.
+/// Strictly reserved for financial gain/loss per the design spec — never
+/// for decorative accents elsewhere in the UI.
 ///
-/// The palette is intentionally green-free — the app standardised on blue for
-/// every "good / positive" affordance. Negatives stay red because that's the
-/// universal accounting convention and the only non-blue accent we keep.
+/// Emerald = positive (gain), Rose = negative (loss). Tuned for both
+/// themes so the contrast meets WCAG AA against the scaffold colours.
 class BalanceColors {
-  /// Material Blue 700 (light) / Blue 300 (dark). Replaces the green that
-  /// used to mean "positive balance".
+  /// Emerald 600 (light) / Emerald 400 (dark).
   static Color positive(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF64B5F6)
-          : const Color(0xFF1976D2);
+          ? const Color(0xFF34D399)
+          : const Color(0xFF059669);
 
+  /// Rose 600 (light) / Rose 400 (dark).
   static Color negative(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFFEF5350)
-          : const Color(0xFFC62828);
+          ? const Color(0xFFFB7185)
+          : const Color(0xFFE11D48);
 
-  /// Picks blue (positive) or red (negative) based on the sign.
+  /// Picks Emerald (positive) or Rose (negative) based on the sign.
   static Color signed(BuildContext context, num value) =>
       value >= 0 ? positive(context) : negative(context);
 }

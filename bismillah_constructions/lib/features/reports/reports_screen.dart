@@ -33,6 +33,7 @@ class ReportsScreen extends StatelessWidget {
           _SectionTitle('Financial Statements'),
           _ReportTile(
             icon: Icons.trending_up,
+            color: Colors.green,
             title: 'Income Statement (P&L)',
             subtitle: 'Revenue minus material and labour costs',
             onTap: () => Navigator.push(
@@ -42,6 +43,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.account_balance,
+            color: Colors.blue,
             title: 'Balance Sheet',
             subtitle: 'Assets vs Liabilities + Equity',
             onTap: () => Navigator.push(
@@ -51,6 +53,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.swap_vert,
+            color: Colors.deepPurple,
             title: 'Cash Flow Statement',
             subtitle:
                 'Operating, financing and net cash movement across all projects',
@@ -62,6 +65,7 @@ class ReportsScreen extends StatelessWidget {
           _SectionTitle('Ledgers'),
           _ReportTile(
             icon: Icons.receipt_long,
+            color: Colors.teal,
             title: 'Material Supplier Ledger',
             subtitle:
                 'Statement of account for a material supplier (across or within a project)',
@@ -72,6 +76,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.engineering,
+            color: Colors.purple,
             title: 'Labour Supplier Ledger',
             subtitle:
                 'Per-worker statement of every wage charged (paid + on credit), date-filterable',
@@ -82,6 +87,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.account_balance_wallet,
+            color: Colors.cyan,
             title: 'Bank / Wallet Ledger',
             subtitle:
                 'Statement of every transaction through a specific bank or wallet',
@@ -92,6 +98,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.foundation,
+            color: Colors.indigo,
             title: 'Project Ledger',
             subtitle: 'All transactions for a single project (running balance)',
             onTap: () => Navigator.push(
@@ -102,6 +109,7 @@ class ReportsScreen extends StatelessWidget {
           _SectionTitle('Aging'),
           _ReportTile(
             icon: Icons.hourglass_bottom,
+            color: Colors.red,
             title: 'Aging — Payables',
             subtitle:
                 'Outstanding supplier payables bucketed 0-30 / 31-60 / 61-90 / 90+',
@@ -112,6 +120,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.hourglass_top,
+            color: Colors.amber,
             title: 'Aging — Receivables',
             subtitle:
                 'Money owed to you — projects under-funded by customers, suppliers we\'ve overpaid',
@@ -123,6 +132,7 @@ class ReportsScreen extends StatelessWidget {
           _SectionTitle('Operations'),
           _ReportTile(
             icon: Icons.bar_chart,
+            color: Colors.deepOrange,
             title: 'Supplier-wise Spending',
             subtitle:
                 'Which vendors consume the most capital — material + labour combined, filterable by period',
@@ -134,6 +144,7 @@ class ReportsScreen extends StatelessWidget {
           _SectionTitle('Project Analysis'),
           _ReportTile(
             icon: Icons.assessment,
+            color: Colors.pink,
             title: 'Budget vs Actual',
             subtitle: 'Project budget vs actual spend, by category',
             onTap: () => Navigator.push(
@@ -143,6 +154,7 @@ class ReportsScreen extends StatelessWidget {
           ),
           _ReportTile(
             icon: Icons.leaderboard,
+            color: Colors.brown,
             title: 'Project Profitability',
             subtitle:
                 'Per-project Received vs Spent vs Net, ranked by bottom-line return',
@@ -176,10 +188,12 @@ class _SectionTitle extends StatelessWidget {
 class _ReportTile extends StatelessWidget {
   const _ReportTile(
       {required this.icon,
+      required this.color,
       required this.title,
       required this.subtitle,
       required this.onTap});
   final IconData icon;
+  final Color color;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
@@ -188,7 +202,11 @@ class _ReportTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: ListTile(
-        leading: CircleAvatar(child: Icon(icon)),
+        leading: CircleAvatar(
+          backgroundColor: color.withValues(alpha: 0.15),
+          foregroundColor: color,
+          child: Icon(icon),
+        ),
         title: Text(title,
             style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(subtitle),

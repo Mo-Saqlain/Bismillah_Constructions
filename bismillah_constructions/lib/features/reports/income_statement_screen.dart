@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants.dart';
 import '../../core/formatters.dart';
+import '../../core/theme.dart';
 import '../../data/models/project.dart';
+import '../../data/repositories/ledger_repository.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../common/date_range_bar.dart';
@@ -24,95 +25,16 @@ class _IncomeStatementScreenState
   DateTime? _from;
   DateTime? _to;
 
-  /// Computes income statement figures respecting the two project models:
-  ///
-  /// With-Material: money received IS our revenue (capped at budget).
-  ///   Any excess over budget = customer deposit we owe back.
-  ///   Material and labour costs ARE our costs.
-  ///
-  /// Labour-Rate: money received is a CUSTOMER DEPOSIT (liability), not revenue.
-  ///   Our revenue = service fee only (earned at project close).
-  ///   Labour/material costs are the customer's costs funded by their deposit —
-  ///   they should NOT appear on our P&L.
-  ///   Customer deposit owed back = received − service-fee-reclassified − costs
-  ///     paid on customer's behalf.
-  Future<_ISFigures> _figures(WidgetRef ref) async {
+  /// Defers all heavy lifting to [LedgerRepository.incomeFigures], which
+  /// implements cost-recovery PoC and the loss-provision rule. This keeps
+  /// the screen thin and the Income Statement, dashboard and BvA in
+  /// agreement on what counts as recognized revenue.
+  Future<IncomeFigures> _figures(WidgetRef ref) async {
     final repo = await ref.read(ledgerRepoProvider.future);
-    final entityRepo = await ref.read(entityRepoProvider.future);
-
-    // Load ALL projects (incl. archived) so closed jobs' figures are included.
-    final allProjects = await entityRepo.projects(includeArchived: true);
-
-    final scope = _projectId != null
-        ? allProjects.where((p) => p.id == _projectId).toList()
-        : allProjects;
-
-    final lrProjects =
-        scope.where((p) => p.model == ProjectModel.labourRate).toList();
-    final wmProjects =
-        scope.where((p) => p.model == ProjectModel.withMaterial).toList();
-
-    // ── With-Material revenue (capped at budget per project) ─────────────────
-    double wmRevenue = 0;
-    double wmDeposit = 0;
-    for (final proj in wmProjects) {
-      final received = await repo.creditBalance(Accounts.projectRevenue.id,
-          projectId: proj.id, from: _from, to: _to);
-      final b = proj.budget;
-      if (b != null && received > b) {
-        wmRevenue += b;
-        wmDeposit += received - b;
-      } else {
-        wmRevenue += received;
-      }
-    }
-
-    // ── With-Material costs (OUR costs) ──────────────────────────────────────
-    double matCosts = 0;
-    double labCosts = 0;
-    for (final proj in wmProjects) {
-      matCosts += await repo.accountBalance(Accounts.materialCosts.id,
-          projectId: proj.id, from: _from, to: _to);
-      labCosts += await repo.accountBalance(Accounts.labourCosts.id,
-          projectId: proj.id, from: _from, to: _to);
-    }
-
-    // ── Service fees (earned income across all project types) ─────────────────
-    // When project-filtered to a specific project, only that project's fees.
-    final serviceFees = await repo.creditBalance(Accounts.serviceFeeIncome.id,
-        projectId: _projectId, from: _from, to: _to);
-
-    // ── Personal draw (unlinked to projects) ─────────────────────────────────
-    final draw = _projectId == null
-        ? await repo.accountBalance(Accounts.personalDraw.id,
-            from: _from, to: _to)
-        : 0.0;
-
-    // ── Labour-Rate customer deposit ──────────────────────────────────────────
-    // Deposit still owed = (received − service-fee reclassified) − costs paid
-    // on the customer's behalf (material + labour).
-    // creditBalance(projectRevenue, LR) is already net of postProjectServiceFee
-    // reclassification (Dr projectRevenue → Cr serviceFeeIncome).
-    double lrDeposit = 0;
-    for (final proj in lrProjects) {
-      final projRev = await repo.creditBalance(Accounts.projectRevenue.id,
-          projectId: proj.id, from: _from, to: _to);
-      final labLR = await repo.accountBalance(Accounts.labourCosts.id,
-          projectId: proj.id, from: _from, to: _to);
-      final matLR = await repo.accountBalance(Accounts.materialCosts.id,
-          projectId: proj.id, from: _from, to: _to);
-      final net = projRev - labLR - matLR;
-      if (net > 0) lrDeposit += net;
-    }
-
-    return _ISFigures(
-      wmRevenue: wmRevenue,
-      serviceFees: serviceFees,
-      matCosts: matCosts,
-      labCosts: labCosts,
-      personalDraw: draw,
-      lrDeposit: lrDeposit,
-      wmDeposit: wmDeposit,
+    return repo.incomeFigures(
+      from: _from,
+      to: _to,
+      projectId: _projectId,
     );
   }
 
@@ -153,7 +75,7 @@ class _IncomeStatementScreenState
             ),
           ),
           const SizedBox(height: 16),
-          FutureBuilder<_ISFigures>(
+          FutureBuilder<IncomeFigures>(
             key: ValueKey(
                 '$_projectId-$version-${_from?.toIso8601String()}-${_to?.toIso8601String()}'),
             future: figuresFuture,
@@ -165,10 +87,10 @@ class _IncomeStatementScreenState
                 );
               }
               final f = snap.data!;
-              final totalIncome = f.wmRevenue + f.serviceFees;
-              final totalCosts = f.matCosts + f.labCosts + f.personalDraw;
-              final net = totalIncome - totalCosts;
-              final totalDeposit = f.lrDeposit + f.wmDeposit;
+              final totalIncome = f.totalIncome;
+              final totalCosts = f.totalCosts;
+              final net = f.netProfit;
+              final totalDeposit = f.totalDeposit;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -177,6 +99,8 @@ class _IncomeStatementScreenState
                     child: Text('Period: ${formatPeriod(_from, _to)}',
                         style: Theme.of(ctx).textTheme.bodySmall),
                   ),
+                  if (f.projectsAtRisk.isNotEmpty)
+                    _AtRiskBanner(risks: f.projectsAtRisk),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -197,14 +121,16 @@ class _IncomeStatementScreenState
                           _row(context, 'Labour Costs', -f.labCosts),
                           if (f.personalDraw > 0)
                             _row(context, 'Personal Draw', -f.personalDraw),
+                          if (f.lossProvision > 0)
+                            _row(context, 'Loss Provision (over-budget jobs)',
+                                -f.lossProvision,
+                                color: BalanceColors.negative(context)),
                           _row(context, 'Total Costs', -totalCosts,
                               bold: true),
                           const Divider(),
                           _row(context, 'Net Profit / (Loss)', net,
                               bold: true,
-                              color: net >= 0
-                                  ? Colors.blue.shade700
-                                  : Colors.red.shade700),
+                              color: BalanceColors.signed(context, net)),
                           // ── Customer Deposits (informational) ───────────
                           if (totalDeposit > 0) ...[
                             const SizedBox(height: 12),
@@ -225,7 +151,7 @@ class _IncomeStatementScreenState
                                   -f.lrDeposit,
                                   color: Colors.orange.shade700),
                             if (f.wmDeposit > 0)
-                              _row(context, '  Over-budget (With-Material)',
+                              _row(context, '  Unearned (With-Material)',
                                   -f.wmDeposit,
                                   color: Colors.orange.shade700),
                             _row(context, '  Total deposits owed',
@@ -359,24 +285,87 @@ class _IncomeStatementScreenState
   }
 }
 
-class _ISFigures {
-  final double wmRevenue;
-  final double serviceFees;
-  final double matCosts;
-  final double labCosts;
-  final double personalDraw;
-  /// Net customer deposit owed back from Labour-Rate projects.
-  final double lrDeposit;
-  /// Excess received over budget from With-Material projects.
-  final double wmDeposit;
+/// Banner shown above the Income Statement when one or more projects are
+/// approaching or already past their budget. Mirrors the cost-budget signal
+/// from the BvA report so the user sees the loss warning at the P&L level.
+class _AtRiskBanner extends StatelessWidget {
+  const _AtRiskBanner({required this.risks});
+  final List<ProjectAtRisk> risks;
 
-  const _ISFigures({
-    required this.wmRevenue,
-    required this.serviceFees,
-    required this.matCosts,
-    required this.labCosts,
-    required this.personalDraw,
-    required this.lrDeposit,
-    required this.wmDeposit,
-  });
+  @override
+  Widget build(BuildContext context) {
+    final overCount = risks.where((r) => r.isOverBudget).length;
+    final warnCount = risks.length - overCount;
+    final headlineColor = overCount > 0
+        ? BalanceColors.negative(context)
+        : Colors.orange.shade700;
+
+    return Card(
+      color: (overCount > 0
+              ? BalanceColors.negative(context)
+              : Colors.orange.shade700)
+          .withValues(alpha: 0.10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                    overCount > 0
+                        ? Icons.error_outline
+                        : Icons.warning_amber_outlined,
+                    color: headlineColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    overCount > 0
+                        ? 'Projects at risk — $overCount over budget'
+                            '${warnCount > 0 ? ', $warnCount approaching' : ''}'
+                        : '$warnCount project(s) approaching budget',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700, color: headlineColor),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            for (final r in risks.take(5))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(r.projectName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                    Text(
+                      r.isOverBudget
+                          ? '${r.pctConsumed.toStringAsFixed(0)}% — over by ${fmtMoney(r.costsToDate - r.budget)}'
+                          : '${r.pctConsumed.toStringAsFixed(0)}% used',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: r.isOverBudget
+                              ? BalanceColors.negative(context)
+                              : Colors.orange.shade800),
+                    ),
+                  ],
+                ),
+              ),
+            if (risks.length > 5)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('+ ${risks.length - 5} more',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
 }

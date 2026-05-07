@@ -26,6 +26,7 @@ class ManageScreen extends StatelessWidget {
         children: [
           _ManageCard(
             icon: Icons.foundation,
+            color: Colors.indigo,
             title: 'Projects',
             subtitle: 'Active sites, archived jobs and project metadata',
             onTap: () => Navigator.push(
@@ -35,6 +36,7 @@ class ManageScreen extends StatelessWidget {
           ),
           _ManageCard(
             icon: Icons.local_shipping,
+            color: Colors.deepOrange,
             title: 'Suppliers',
             subtitle: 'Material vendors and labour providers',
             onTap: () => Navigator.push(
@@ -44,6 +46,7 @@ class ManageScreen extends StatelessWidget {
           ),
           _ManageCard(
             icon: Icons.account_balance,
+            color: Colors.teal,
             title: 'Wallets & Banks',
             subtitle:
                 'Cash accounts, supervisor floats and bank/wallet ledgers',
@@ -54,6 +57,7 @@ class ManageScreen extends StatelessWidget {
           ),
           _ManageCard(
             icon: Icons.category,
+            color: Colors.brown,
             title: 'Material Types',
             subtitle:
                 'Categories shown in the Buy Material dropdown (Brick, Cement, custom…)',
@@ -64,6 +68,7 @@ class ManageScreen extends StatelessWidget {
           ),
           _ManageCard(
             icon: Icons.engineering,
+            color: Colors.purple,
             title: 'Labour Types',
             subtitle:
                 'Skill categories for labour (Mason, Electrician, Plumber…)',
@@ -81,12 +86,14 @@ class ManageScreen extends StatelessWidget {
 class _ManageCard extends StatelessWidget {
   const _ManageCard({
     required this.icon,
+    required this.color,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
 
   final IconData icon;
+  final Color color;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
@@ -97,7 +104,11 @@ class _ManageCard extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Card(
         child: ListTile(
-          leading: CircleAvatar(child: Icon(icon)),
+          leading: CircleAvatar(
+            backgroundColor: color.withValues(alpha: 0.15),
+            foregroundColor: color,
+            child: Icon(icon),
+          ),
           title: Text(title,
               style: const TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Text(subtitle),

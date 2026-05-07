@@ -268,64 +268,133 @@ class _ProfitabilityChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxAbs = rows.fold<double>(0, (m, r) => r.net.abs() > m ? r.net.abs() : m);
+    final maxAbs =
+        rows.fold<double>(0, (m, r) => r.net.abs() > m ? r.net.abs() : m);
     if (maxAbs == 0) return const SizedBox.shrink();
 
-    return SizedBox(
-      height: 160,
-      child: BarChart(
-        BarChartData(
-          maxY: maxAbs * 1.25,
-          minY: -(maxAbs * 0.1),
-          barGroups: rows.asMap().entries.map((e) {
-            final net = e.value.net;
-            return BarChartGroupData(
-              x: e.key,
-              barRods: [
-                BarChartRodData(
-                  toY: net,
-                  color: net >= 0
-                      ? BalanceColors.positive(context)
-                      : BalanceColors.negative(context),
-                  width: _barWidth(rows.length),
-                  borderRadius: net >= 0
-                      ? const BorderRadius.vertical(top: Radius.circular(3))
-                      : const BorderRadius.vertical(bottom: Radius.circular(3)),
-                ),
-              ],
-            );
-          }).toList(),
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 28,
-                getTitlesWidget: (v, _) {
-                  final i = v.toInt();
-                  if (i < 0 || i >= rows.length) return const SizedBox.shrink();
-                  final name = rows[i].name;
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      name.length > 9 ? '${name.substring(0, 9)}…' : name,
-                      style: const TextStyle(fontSize: 8),
-                      textAlign: TextAlign.center,
+    final hasNegative = rows.any((r) => r.net < 0);
+    final maxY = maxAbs * 1.25;
+    final minY = hasNegative ? -maxAbs * 1.25 : 0.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Each bar = one project. Green above zero = profit, red below = loss.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 200,
+          child: BarChart(
+            BarChartData(
+              maxY: maxY,
+              minY: minY,
+              barGroups: rows.asMap().entries.map((e) {
+                final net = e.value.net;
+                return BarChartGroupData(
+                  x: e.key,
+                  barRods: [
+                    BarChartRodData(
+                      toY: net,
+                      color: net >= 0
+                          ? BalanceColors.positive(context)
+                          : BalanceColors.negative(context),
+                      width: _barWidth(rows.length),
+                      borderRadius: net >= 0
+                          ? const BorderRadius.vertical(top: Radius.circular(3))
+                          : const BorderRadius.vertical(
+                              bottom: Radius.circular(3)),
                     ),
-                  );
-                },
+                  ],
+                );
+              }).toList(),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  axisNameWidget: Text('Project',
+                      style: Theme.of(context).textTheme.labelSmall),
+                  axisNameSize: 14,
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 28,
+                    getTitlesWidget: (v, _) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= rows.length) {
+                        return const SizedBox.shrink();
+                      }
+                      final name = rows[i].name;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          name.length > 9 ? '${name.substring(0, 9)}…' : name,
+                          style: const TextStyle(fontSize: 9),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  axisNameWidget: Text('Net (Rs)',
+                      style: Theme.of(context).textTheme.labelSmall),
+                  axisNameSize: 14,
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 52,
+                    interval: _yAxisInterval(maxAbs),
+                    getTitlesWidget: (v, _) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        fmtCompactMoney(v),
+                        style: const TextStyle(fontSize: 9),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+              ),
+              borderData: FlBorderData(show: false),
+              // Bold zero line so positive vs negative is unmistakable.
+              extraLinesData: ExtraLinesData(horizontalLines: [
+                HorizontalLine(
+                  y: 0,
+                  color:
+                      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                  strokeWidth: 1,
+                ),
+              ]),
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: _yAxisInterval(maxAbs),
+                getDrawingHorizontalLine: (_) => FlLine(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .outlineVariant
+                      .withValues(alpha: 0.4),
+                  strokeWidth: 1,
+                ),
+              ),
+              barTouchData: BarTouchData(
+                enabled: true,
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipItem: (group, _, rod, _) => BarTooltipItem(
+                    '${rows[group.x].name}\n${fmtSignedMoney(rod.toY)}',
+                    const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11),
+                  ),
+                ),
               ),
             ),
-            leftTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
-          borderData: FlBorderData(show: false),
-          gridData: const FlGridData(show: false),
         ),
-      ),
+      ],
     );
   }
 
@@ -333,6 +402,27 @@ class _ProfitabilityChart extends StatelessWidget {
     if (count <= 5) return 20;
     if (count <= 10) return 14;
     return 10;
+  }
+
+  double _yAxisInterval(double maxAbs) {
+    if (maxAbs <= 0) return 1;
+    final raw = maxAbs / 4;
+    var mag = 1.0;
+    while (mag * 10 <= raw) {
+      mag *= 10;
+    }
+    while (mag > raw && mag > 1e-9) {
+      mag /= 10;
+    }
+    final norm = raw / mag;
+    final nice = norm < 1.5
+        ? 1.0
+        : norm < 3
+            ? 2.0
+            : norm < 7
+                ? 5.0
+                : 10.0;
+    return nice * mag;
   }
 }
 

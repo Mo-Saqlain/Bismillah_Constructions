@@ -280,9 +280,23 @@ class AccountSummary {
 
   final double materialCosts;
   final double labourCosts;
+  /// PoC-recognized contract revenue (cost-recovery for active jobs, full
+  /// contract on close). NOT raw projectRevenue credits — those would
+  /// inflate profit by booking customer deposits as earned income.
   final double revenue;
   final double serviceFeeIncome;
   final double personalDraw;
+
+  /// Sum of (costs - budget) across every project where actual costs
+  /// exceeded budget. Recognized as an immediate cost (FASB/IFRS).
+  final double lossProvision;
+
+  /// Customer money received but not yet earned — a liability we'd have to
+  /// refund / deliver work for. Sum of LR + With-Material deposits.
+  final double customerDeposits;
+
+  /// Project-level loss warnings sourced from [LedgerRepository.incomeFigures].
+  final List<ProjectAtRisk> projectsAtRisk;
 
   final double counterReceivables;
   final double counterPayables;
@@ -298,6 +312,9 @@ class AccountSummary {
     required this.revenue,
     required this.serviceFeeIncome,
     required this.personalDraw,
+    required this.lossProvision,
+    required this.customerDeposits,
+    required this.projectsAtRisk,
     required this.counterReceivables,
     required this.counterPayables,
   });
@@ -318,7 +335,9 @@ class AccountSummary {
   double get assets => liquidCash + counterReceivables;
   double get liabilities => payables + counterPayables;
   double get netProfit =>
-      revenue + serviceFeeIncome - (materialCosts + labourCosts + personalDraw);
+      revenue +
+      serviceFeeIncome -
+      (materialCosts + labourCosts + personalDraw + lossProvision);
   double get equity => assets - liabilities;
 
   double get netPosition => counterReceivables - (payables + counterPayables);
@@ -337,10 +356,6 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
   final fixed = await Future.wait([
     dr(Accounts.cash.id),
     cr(Accounts.supplierPayables.id),
-    dr(Accounts.materialCosts.id),
-    dr(Accounts.labourCosts.id),
-    cr(Accounts.projectRevenue.id),
-    cr(Accounts.serviceFeeIncome.id),
     dr(Accounts.personalDraw.id),
   ]);
 
@@ -361,17 +376,24 @@ final accountSummaryProvider = FutureProvider<AccountSummary>((ref) async {
   // agree.
   final receivables = await repo.receivablesTotals();
 
+  // PoC-recognized P&L figures — single source of truth shared with the
+  // Income Statement. Avoids fake profit from advance customer payments.
+  final income = await repo.incomeFigures();
+
   return AccountSummary(
     cash: fixed[0],
     bankBalances: bankBalances,
     payables: fixed[1],
     projectReceivables: receivables.projectsOwed,
     supplierOverpayments: receivables.suppliersOverpaid,
-    materialCosts: fixed[2],
-    labourCosts: fixed[3],
-    revenue: fixed[4],
-    serviceFeeIncome: fixed[5],
-    personalDraw: fixed[6],
+    materialCosts: income.matCosts,
+    labourCosts: income.labCosts,
+    revenue: income.wmRevenue,
+    serviceFeeIncome: income.serviceFees,
+    personalDraw: fixed[2],
+    lossProvision: income.lossProvision,
+    customerDeposits: income.totalDeposit,
+    projectsAtRisk: income.projectsAtRisk,
     counterReceivables: counterRecv,
     counterPayables: counterPay,
   );
