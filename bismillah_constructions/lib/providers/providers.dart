@@ -10,6 +10,7 @@ import '../data/models/bank.dart';
 import '../data/models/change_log.dart';
 import '../data/models/counter_entity.dart';
 import '../data/models/journal_entry.dart';
+import '../data/models/labour_type_def.dart';
 import '../data/models/material_type_def.dart';
 import '../data/models/party.dart';
 import '../data/models/project.dart';
@@ -182,6 +183,13 @@ final materialTypesProvider =
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);
   return repo.materialTypes();
+});
+
+final labourTypesProvider =
+    FutureProvider<List<LabourTypeDef>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.labourTypes();
 });
 
 // ---- Ledger reads ----

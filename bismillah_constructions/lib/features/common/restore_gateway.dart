@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_restart.dart';
 import '../../core/formatters.dart';
 import '../../data/db/local_db.dart';
 import '../../data/services/backup_service.dart';
@@ -119,19 +120,15 @@ class _RestoreGatewayState extends ConsumerState<RestoreGateway> {
     final dbPath = LocalDb.instance.dbPath;
     if (dbPath == null) return;
 
-    // Close the empty DB connection.
+    // Close the in-process (empty) DB so sqflite releases the file handle.
     await LocalDb.instance.reinitialize();
 
     // Overwrite the DB file with the backup.
     await File(backupPath).copy(dbPath);
 
-    // Reopen with the restored data.
-    await LocalDb.instance.open();
-
-    // Flush all providers so every screen reloads from the new DB.
-    ref.invalidate(dbProvider);
-    await Future<void>.delayed(Duration.zero);
-    bumpLedger(ref);
+    // Trigger a full ProviderScope teardown → all providers rebuild from
+    // scratch and LocalDb.open() reopens the now-restored file cleanly.
+    restartApp();
   }
 
   @override

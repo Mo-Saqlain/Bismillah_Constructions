@@ -7,6 +7,7 @@ import '../../core/constants.dart';
 import '../models/bank.dart';
 import '../models/change_log.dart';
 import '../models/counter_entity.dart';
+import '../models/labour_type_def.dart';
 import '../models/material_item.dart';
 import '../models/material_type_def.dart';
 import '../models/party.dart';
@@ -751,6 +752,68 @@ class EntityRepository {
       orderBy: 'created_at DESC',
     );
     return rows.map(MaterialItem.fromMap).toList();
+  }
+
+  // ---- Labour Types ----
+
+  Future<List<LabourTypeDef>> labourTypes() async {
+    final rows = await _db.query('labour_types', orderBy: 'name ASC');
+    return rows.map(LabourTypeDef.fromMap).toList();
+  }
+
+  Future<LabourTypeDef?> addLabourType(
+    String name, {
+    String? description,
+    double? defaultDailyRate,
+  }) async {
+    final clean = name.trim();
+    if (clean.isEmpty) return null;
+    final existing = await _db.query(
+      'labour_types',
+      where: 'LOWER(name) = LOWER(?)',
+      whereArgs: [clean],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      throw StateError('A labour type named "$clean" already exists.');
+    }
+    final row = LabourTypeDef(
+      id: _uuid.v4(),
+      name: clean,
+      description: description?.trim().isEmpty == true ? null : description?.trim(),
+      defaultDailyRate: defaultDailyRate,
+      createdAt: DateTime.now().toUtc(),
+    );
+    await _db.insert('labour_types', row.toMap());
+    return row;
+  }
+
+  Future<void> updateLabourType(
+    String id, {
+    Object? name = _unset,
+    Object? description = _unset,
+    Object? defaultDailyRate = _unset,
+  }) async {
+    final patch = <String, Object?>{};
+    if (!identical(name, _unset)) {
+      final cleaned = (name as String?)?.trim();
+      if (cleaned == null || cleaned.isEmpty) return;
+      patch['name'] = cleaned;
+    }
+    if (!identical(description, _unset)) {
+      final cleaned = (description as String?)?.trim();
+      patch['description'] = (cleaned == null || cleaned.isEmpty) ? null : cleaned;
+    }
+    if (!identical(defaultDailyRate, _unset)) {
+      patch['default_daily_rate'] = defaultDailyRate as double?;
+    }
+    if (patch.isEmpty) return;
+    await _db.update('labour_types', patch, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<bool> deleteLabourType(String id) async {
+    final n = await _db.delete('labour_types', where: 'id = ?', whereArgs: [id]);
+    return n > 0;
   }
 
   // ---- Settings ----

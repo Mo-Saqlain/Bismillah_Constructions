@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 9);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 10);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 9,
+        version: 10,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -231,6 +231,16 @@ class LocalDb {
     await db.execute(
       'CREATE INDEX idx_cl_entity ON change_log(entity_type, entity_id)',
     );
+
+    await db.execute('''
+      CREATE TABLE labour_types (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        default_daily_rate REAL,
+        created_at TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -376,6 +386,19 @@ class LocalDb {
       // rows still display correctly because they store the type name as
       // a free-form string, not a foreign key.
       await db.delete('material_types', where: 'is_builtin = 1');
+    }
+
+    if (oldVersion < 10) {
+      // v10: user-defined labour categories (Mason, Electrician, etc.).
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS labour_types (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          default_daily_rate REAL,
+          created_at TEXT NOT NULL
+        )
+      ''');
     }
 
     if (oldVersion < 3) {

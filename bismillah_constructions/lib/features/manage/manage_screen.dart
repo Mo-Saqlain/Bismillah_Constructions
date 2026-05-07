@@ -4,6 +4,7 @@ import '../parties/banks_screen.dart';
 import '../parties/parties_screen.dart';
 import '../projects/projects_screen.dart';
 import '../settings/material_types_screen.dart';
+import 'labour_types_screen.dart';
 
 /// "Manage" tab — landing page that gathers the four entity-management
 /// screens (Materials, Wallets/Banks, Suppliers, Projects) under a single
@@ -59,6 +60,16 @@ class ManageScreen extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const MaterialTypesScreen()),
+            ),
+          ),
+          _ManageCard(
+            icon: Icons.engineering,
+            title: 'Labour Types',
+            subtitle:
+                'Skill categories for labour (Mason, Electrician, Plumber…)',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LabourTypesScreen()),
             ),
           ),
         ],

@@ -9,22 +9,38 @@ import '../../data/models/journal_entry.dart';
 
 class IncomeStatementData {
   final String? projectName;
-  final double revenue;
+  /// Revenue from With-Material projects (capped at budget per project).
+  final double wmRevenue;
+  /// Service fees earned (Labour-Rate close fees + standalone service fees).
+  final double serviceFees;
   final double materialCosts;
   final double labourCosts;
+  final double personalDraw;
+  /// Customer deposit owed back from Labour-Rate projects.
+  final double lrDeposit;
+  /// Customer deposit owed back from over-budget With-Material payments.
+  final double wmDeposit;
   final DateTime generatedAt;
   /// Human-readable period label ("All dates", "1 Jan 2025 → 31 Mar 2025").
-  /// Surfaced under the title on the PDF.
   final String period;
+
   IncomeStatementData({
     this.projectName,
-    required this.revenue,
+    this.wmRevenue = 0,
+    this.serviceFees = 0,
     required this.materialCosts,
     required this.labourCosts,
+    this.personalDraw = 0,
+    this.lrDeposit = 0,
+    this.wmDeposit = 0,
     required this.generatedAt,
     this.period = 'All dates',
   });
-  double get net => revenue - (materialCosts + labourCosts);
+
+  double get totalIncome => wmRevenue + serviceFees;
+  double get totalCosts => materialCosts + labourCosts + personalDraw;
+  double get net => totalIncome - totalCosts;
+  double get totalDeposit => lrDeposit + wmDeposit;
 }
 
 class BalanceSheetData {
@@ -196,16 +212,37 @@ class PdfGenerator {
                   'Period: ${d.period}  ·  '
                   'Generated ${fmtDateTime(d.generatedAt)}'),
           pw.SizedBox(height: 12),
-          _line('Project Revenue', d.revenue, bold: true),
+          // ── Income ──────────────────────────────────────────────────────
+          if (d.wmRevenue > 0)
+            _line('Contract Revenue (With-Material)', d.wmRevenue),
+          if (d.serviceFees > 0)
+            _line('Service Fees', d.serviceFees),
+          _line('Total Income', d.totalIncome, bold: true),
           pw.SizedBox(height: 8),
-          pw.Text('Direct Costs',
+          // ── Costs ────────────────────────────────────────────────────────
+          pw.Text('Costs & Draws',
               style: pw.TextStyle(
                   fontSize: 12, fontWeight: pw.FontWeight.bold)),
           _line('  Material Costs', d.materialCosts),
           _line('  Labour Costs', d.labourCosts),
-          _line('  Total Costs', d.materialCosts + d.labourCosts, bold: true),
+          if (d.personalDraw > 0)
+            _line('  Personal Draw', d.personalDraw),
+          _line('  Total Costs', d.totalCosts, bold: true),
           pw.Divider(),
           _line('Net Profit / (Loss)', d.net, bold: true),
+          // ── Customer Deposits (informational) ────────────────────────────
+          if (d.totalDeposit > 0) ...[
+            pw.SizedBox(height: 10),
+            pw.Divider(),
+            pw.Text('Customer Deposits (owed back)',
+                style: pw.TextStyle(
+                    fontSize: 11, fontWeight: pw.FontWeight.bold)),
+            if (d.lrDeposit > 0)
+              _line('  Labour-Rate projects', -d.lrDeposit),
+            if (d.wmDeposit > 0)
+              _line('  Over-budget (With-Material)', -d.wmDeposit),
+            _line('  Total deposits owed', -d.totalDeposit, bold: true),
+          ],
         ],
       ),
     ));

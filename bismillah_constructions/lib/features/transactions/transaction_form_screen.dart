@@ -1,12 +1,16 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
+import '../../core/formatters.dart';
+import '../../data/models/labour_type_def.dart';
 import '../../data/models/party.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../manage/labour_types_screen.dart';
 import '../settings/material_types_screen.dart';
 
 class TransactionFormScreen extends ConsumerStatefulWidget {
@@ -23,18 +27,15 @@ class _TransactionFormScreenState
   final _formKey = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
-  /// Only used for [TxnKind.labourCredit] — number of workers that came in
-  /// for the period being recorded. Folded into the description like
-  /// `N workers · {user memo}` so the count survives in the audit log.
   final _workerCountCtrl = TextEditingController();
+  final _quantityCtrl = TextEditingController();
 
   String? _projectId;
   String? _supplierId;
   Account? _cashLike;
   Account? _transferTo;
-  /// User-managed material category, resolved from the `materialTypesProvider`
-  /// list once it loads. The dropdown defaults to the first available type.
   String? _materialType;
+  String? _labourTypeName;
   bool _saving = false;
 
   TxnKind get _k => widget.kind;
@@ -42,8 +43,9 @@ class _TransactionFormScreenState
   bool get _isWalletTransfer => _k == TxnKind.walletTransfer;
   bool get _isPersonalDraw => _k == TxnKind.personalDraw;
   bool get _isLabourCredit => _k == TxnKind.labourCredit;
+  bool get _isLabourPayment => _k == TxnKind.labourPayment;
+  bool get _isLabourTxn => _isLabourCredit || _isLabourPayment;
 
-  /// Project is REQUIRED for everything that touches a project's books.
   bool get _needsProject => switch (_k) {
         TxnKind.materialBuy ||
         TxnKind.labourPayment ||
@@ -54,8 +56,6 @@ class _TransactionFormScreenState
         _ => false,
       };
 
-  /// Project is OPTIONAL for supplier-payments (they may settle a payable
-  /// shared across projects).
   bool get _needsOptionalProject => _k == TxnKind.supplierPay;
 
   bool get _needsSupplier => switch (_k) {
@@ -83,6 +83,7 @@ class _TransactionFormScreenState
     _amountCtrl.dispose();
     _descCtrl.dispose();
     _workerCountCtrl.dispose();
+    _quantityCtrl.dispose();
     super.dispose();
   }
 
@@ -100,23 +101,30 @@ class _TransactionFormScreenState
       final ledger = await ref.read(ledgerRepoProvider.future);
       final desc =
           _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim();
-      // Strip the live thousands separators before parsing — the formatter
-      // injects commas for readability while the user types.
       final amount = double.parse(_amountCtrl.text.replaceAll(',', ''));
 
       String txnId;
       switch (_k) {
         case TxnKind.materialBuy:
-          // Defensive: the dropdown's validator should have caught this, but
-          // belt-and-suspenders prevents a NPE crash on edge race conditions.
           if (_materialType == null) {
             throw StateError('Pick a material type first.');
           }
+          // Build description: "15 Each · memo" (quantity+unit prepended if entered)
+          final types = await ref.read(materialTypesProvider.future);
+          final selType =
+              types.firstWhereOrNull((t) => t.name == _materialType);
+          final uom = selType?.uom ?? '';
+          final qtyRaw = _quantityCtrl.text.trim();
+          final qtyStr = qtyRaw.isNotEmpty
+              ? '$qtyRaw${uom.isNotEmpty ? ' $uom' : ''}'
+              : '';
+          final fullMemo =
+              [if (qtyStr.isNotEmpty) qtyStr, ?desc].join(' · ');
           txnId = await ledger.postMaterialBuy(
               amount: amount,
               projectId: _projectId!,
               supplierId: _supplierId!,
-              description: desc);
+              description: fullMemo.isEmpty ? null : fullMemo);
           final entityRepo = await ref.read(entityRepoProvider.future);
           await entityRepo.logMaterialPurchase(
             projectId: _projectId!,
@@ -126,17 +134,22 @@ class _TransactionFormScreenState
             price: amount,
           );
         case TxnKind.labourPayment:
+          final memo = [
+            if (_labourTypeName != null && _labourTypeName!.isNotEmpty)
+              _labourTypeName!,
+            ?desc,
+          ].join(' · ');
           txnId = await ledger.postLabourPayment(
               amount: amount,
               projectId: _projectId!,
               supplierId: _supplierId!,
               paidFrom: _cashLike!,
-              description: desc);
+              description: memo.isEmpty ? null : memo);
         case TxnKind.labourCredit:
-          // Worker count gets prepended to the memo so the audit trail keeps
-          // the headcount alongside the wages amount.
           final n = int.tryParse(_workerCountCtrl.text.trim());
           final memo = [
+            if (_labourTypeName != null && _labourTypeName!.isNotEmpty)
+              _labourTypeName!,
             if (n != null && n > 0) '$n worker${n == 1 ? '' : 's'}',
             ?desc,
           ].join(' · ');
@@ -204,6 +217,8 @@ class _TransactionFormScreenState
     final projects = ref.watch(activeProjectsProvider);
     final suppliers = ref.watch(suppliersProvider);
     final cashLike = ref.watch(cashLikeAccountsProvider);
+    final materialTypes = ref.watch(materialTypesProvider);
+    final labourTypes = ref.watch(labourTypesProvider);
 
     return Scaffold(
       appBar: AppBar(title: Text(_k.label)),
@@ -217,14 +232,61 @@ class _TransactionFormScreenState
               _RoutingSummary(kind: _k),
               const SizedBox(height: 16),
 
+              // ── Material type + quantity ──────────────────────────────────
               if (_isMaterialBuy) ...[
                 _MaterialTypePicker(
                   current: _materialType,
                   onChanged: (v) => setState(() => _materialType = v),
                 ),
                 const SizedBox(height: 12),
+                // Quantity field — label adapts to the selected type's unit.
+                materialTypes.when(
+                  loading: () => const SizedBox.shrink(),
+                  error: (e, st) => const SizedBox.shrink(),
+                  data: (types) {
+                    final sel = types.firstWhereOrNull(
+                        (t) => t.name == _materialType);
+                    final uom = sel?.uom;
+                    return TextFormField(
+                      controller: _quantityCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                            RegExp(r'[0-9.]')),
+                      ],
+                      decoration: InputDecoration(
+                        labelText: uom != null && uom.isNotEmpty
+                            ? 'Quantity ($uom)'
+                            : 'Quantity (optional)',
+                        helperText: uom != null && uom.isNotEmpty
+                            ? 'How many $uom purchased'
+                            : 'Unit of measure not set for this material type',
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
               ],
 
+              // ── Labour type ───────────────────────────────────────────────
+              if (_isLabourTxn) ...[
+                _LabourTypePicker(
+                  current: _labourTypeName,
+                  labourTypes: labourTypes,
+                  onChanged: (name, type) => setState(() {
+                    _labourTypeName = name;
+                    // Pre-fill amount hint when a default rate is set.
+                    if (type?.defaultDailyRate != null &&
+                        _amountCtrl.text.isEmpty) {
+                      _amountCtrl.text = fmtMoney(type!.defaultDailyRate!);
+                    }
+                  }),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // ── Worker count (labour on credit only) ──────────────────────
               if (_isLabourCredit) ...[
                 TextFormField(
                   controller: _workerCountCtrl,
@@ -241,6 +303,7 @@ class _TransactionFormScreenState
                 const SizedBox(height: 12),
               ],
 
+              // ── Amount ───────────────────────────────────────────────────
               TextFormField(
                 controller: _amountCtrl,
                 keyboardType:
@@ -251,12 +314,9 @@ class _TransactionFormScreenState
                 ],
                 style: const TextStyle(
                     fontSize: 28, fontWeight: FontWeight.w600),
-                decoration: InputDecoration(
-                  labelText: _isMaterialBuy ? 'Price (Rs)' : 'Amount (Rs)',
+                decoration: const InputDecoration(
+                  labelText: 'Amount (Rs)',
                   prefixText: 'Rs ',
-                  helperText: _isMaterialBuy
-                      ? 'Quantity / unit details go in the memo below'
-                      : null,
                 ),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Enter an amount';
@@ -310,11 +370,6 @@ class _TransactionFormScreenState
                 AsyncView<List<Party>>(
                   value: suppliers,
                   data: (list) {
-                    // Filter suppliers by category for category-specific txn kinds.
-                    // labour payments / labour-on-credit → labor suppliers only;
-                    // material payments (TxnKind.supplierPay) and material buys →
-                    // material suppliers only. Suppliers without a category fall
-                    // through (legacy data).
                     final filtered = switch (_k) {
                       TxnKind.labourPayment ||
                       TxnKind.labourCredit =>
@@ -340,7 +395,6 @@ class _TransactionFormScreenState
                             color: Theme.of(context).colorScheme.error),
                       );
                     }
-                    // Drop a stale selection that's no longer in the filtered list.
                     if (_supplierId != null &&
                         !filtered.any((s) => s.id == _supplierId)) {
                       _supplierId = null;
@@ -439,10 +493,8 @@ class _TransactionFormScreenState
               const SizedBox(height: 12),
               TextFormField(
                 controller: _descCtrl,
-                decoration: InputDecoration(
-                  labelText: _isMaterialBuy
-                      ? 'Memo (quantity, unit, etc.)'
-                      : 'Description / Memo (optional)',
+                decoration: const InputDecoration(
+                  labelText: 'Description / Memo (optional)',
                 ),
                 maxLines: 3,
                 minLines: 2,
@@ -546,13 +598,8 @@ class _OfflineNote extends ConsumerWidget {
   }
 }
 
-/// Dropdown of every category in `material_types`, plus a "+ Manage…" trailing
-/// button that jumps straight to the editor so the user can add a new type
-/// without abandoning the in-progress purchase form.
-///
-/// The current selection is reported back through [onChanged]; when the
-/// dropdown first loads with no selection, it auto-picks the first row so the
-/// form is always submittable without an extra tap.
+/// Dropdown of every material category from `material_types`, plus a
+/// "+ Manage…" button to add new types without leaving the form.
 class _MaterialTypePicker extends ConsumerWidget {
   const _MaterialTypePicker({required this.current, required this.onChanged});
 
@@ -567,13 +614,8 @@ class _MaterialTypePicker extends ConsumerWidget {
       error: (e, _) => Text('Could not load material types: $e'),
       data: (types) {
         if (types.isEmpty) {
-          // Defensive: the migration seeds five built-ins, so this only fires
-          // if a user manually deletes everything (which the repo prevents
-          // for built-ins, but we keep a graceful path anyway).
-          return _ManageRow(empty: true);
+          return _ManageRow(empty: true, isLabour: false);
         }
-        // Auto-select the first option once the list is available so the form
-        // doesn't ship with an unselected dropdown.
         final selected =
             types.any((t) => t.name == current) ? current : types.first.name;
         if (selected != current) {
@@ -614,17 +656,105 @@ class _MaterialTypePicker extends ConsumerWidget {
   }
 }
 
-/// Live thousands-separator formatter for the amount input.
-///
-/// Reformats the visible text on every keystroke so the user sees
-/// `1,234,567.89` while typing instead of a wall of digits. The decimal
-/// portion (anything after the first `.`) is left untouched — only the
-/// integer part gets grouped. Cursor position is preserved by counting
-/// how many digits sit to the left of it before and after the rewrite.
-///
-/// We only need to recognise commas / dots as input characters because
-/// the upstream `FilteringTextInputFormatter` already restricts the field
-/// to `[0-9.,]`.
+/// Dropdown of every labour category from `labour_types`, with a
+/// detail card showing skill description and default daily rate.
+class _LabourTypePicker extends StatelessWidget {
+  const _LabourTypePicker({
+    required this.current,
+    required this.labourTypes,
+    required this.onChanged,
+  });
+
+  final String? current;
+  final AsyncValue<List<LabourTypeDef>> labourTypes;
+  final void Function(String? name, LabourTypeDef? type) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return labourTypes.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (e, _) => Text('Could not load labour types: $e'),
+      data: (types) {
+        if (types.isEmpty) {
+          return _ManageRow(empty: true, isLabour: true);
+        }
+        final selType =
+            types.firstWhereOrNull((t) => t.name == current);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: current,
+                    decoration:
+                        const InputDecoration(labelText: 'Labour Type (optional)'),
+                    items: [
+                      const DropdownMenuItem(
+                          value: null, child: Text('— None —')),
+                      ...types.map((t) => DropdownMenuItem(
+                          value: t.name, child: Text(t.name))),
+                    ],
+                    onChanged: (v) {
+                      final t = types.firstWhereOrNull((t) => t.name == v);
+                      onChanged(v, t);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: 'Manage labour types',
+                  icon: const Icon(Icons.tune),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const LabourTypesScreen()),
+                  ),
+                ),
+              ],
+            ),
+            // Detail card shown when a type with metadata is selected.
+            if (selType != null &&
+                (selType.description != null ||
+                    selType.defaultDailyRate != null)) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (selType.description != null) ...[
+                      Text(selType.description!,
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                    if (selType.defaultDailyRate != null)
+                      Text(
+                        'Default daily rate: ${fmtMoney(selType.defaultDailyRate!)}',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _ThousandsSeparatorFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
@@ -632,9 +762,6 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
     final raw = newValue.text;
     if (raw.isEmpty) return newValue;
 
-    // Count digits to the left of the cursor in the raw input — used to
-    // re-position the cursor in the formatted output without snapping it
-    // to the end of the field.
     final cursor = newValue.selection.baseOffset.clamp(0, raw.length);
     var digitsBeforeCursor = 0;
     for (var i = 0; i < cursor; i++) {
@@ -642,8 +769,6 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
       if (ch != ',' && ch != '.') digitsBeforeCursor++;
     }
 
-    // Only one decimal point allowed; everything after the first `.` is
-    // the fractional part and is kept verbatim (no grouping).
     final stripped = raw.replaceAll(',', '');
     final dotIdx = stripped.indexOf('.');
     final intPart = dotIdx == -1 ? stripped : stripped.substring(0, dotIdx);
@@ -652,19 +777,11 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
     final grouped = _groupThousands(intPart);
     final formatted = '$grouped$fracPart';
 
-    // Walk the formatted string left-to-right and stop once we've passed
-    // the same number of digits we counted in the source — that's where
-    // the cursor belongs.
     var newCursor = formatted.length;
     var seen = 0;
     for (var i = 0; i < formatted.length; i++) {
       final ch = formatted[i];
       if (ch != ',' && ch != '.') seen++;
-      if (seen == digitsBeforeCursor && dotIdx == -1
-          ? seen == digitsBeforeCursor
-          : false) {
-        // unreached — explicit branch just below
-      }
       if (seen >= digitsBeforeCursor) {
         newCursor = i + 1;
         break;
@@ -677,8 +794,6 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
     );
   }
 
-  /// Inserts a comma every 3 digits from the right. Empty input returns
-  /// empty so the field can be cleared without showing a stray comma.
   static String _groupThousands(String digits) {
     if (digits.isEmpty) return '';
     final buf = StringBuffer();
@@ -693,8 +808,10 @@ class _ThousandsSeparatorFormatter extends TextInputFormatter {
 }
 
 class _ManageRow extends StatelessWidget {
-  const _ManageRow({this.empty = false});
+  const _ManageRow({this.empty = false, required this.isLabour});
   final bool empty;
+  final bool isLabour;
+
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -702,8 +819,8 @@ class _ManageRow extends StatelessWidget {
         Expanded(
           child: Text(
             empty
-                ? 'No material types defined. Add one to continue.'
-                : 'Manage your material categories.',
+                ? 'No ${isLabour ? 'labour' : 'material'} types defined. Add one to continue.'
+                : 'Manage your ${isLabour ? 'labour' : 'material'} categories.',
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
         ),
@@ -713,11 +830,14 @@ class _ManageRow extends StatelessWidget {
           label: const Text('Add type'),
           onPressed: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const MaterialTypesScreen()),
+            MaterialPageRoute(
+              builder: (_) => isLabour
+                  ? const LabourTypesScreen()
+                  : const MaterialTypesScreen(),
+            ),
           ),
         ),
       ],
     );
   }
 }
-
