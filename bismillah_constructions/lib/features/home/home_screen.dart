@@ -18,15 +18,33 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _homeIndex = 0;
   int _index = _homeIndex;
 
-  // 4 destinations: Home (Dashboard), Settings, Reports, Manage.
+  late final PageController _pageController =
+      PageController(initialPage: _homeIndex);
+
+  // 4 destinations in order: Home, Manage, Reports, Settings.
   // Projects, Suppliers, Banks/Wallets and Material Types all live inside
-  // the Manage tab now so the bottom bar stays at four slots.
+  // the Manage tab so the bottom bar stays at four slots.
   static const _tabs = <Widget>[
     DashboardScreen(),
-    SettingsScreen(),
-    ReportsScreen(),
     ManageScreen(),
+    ReportsScreen(),
+    SettingsScreen(),
   ];
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _goToTab(int i) {
+    if (i == _index) return;
+    _pageController.animateToPage(
+      i,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeInOut,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,33 +58,64 @@ class _HomeScreenState extends State<HomeScreen> {
       canPop: onHome,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (!onHome) setState(() => _index = _homeIndex);
+        if (!onHome) _goToTab(_homeIndex);
       },
       child: Scaffold(
-        body: IndexedStack(index: _index, children: _tabs),
+        body: PageView(
+          controller: _pageController,
+          // Default PageScrollPhysics enables horizontal swipe between tabs.
+          // A pushed sub-screen (e.g. tapping a tile) lives on the root
+          // Navigator above this PageView, so its swipes do not affect tabs.
+          onPageChanged: (i) => setState(() => _index = i),
+          children: _tabs.map((w) => _KeepAlivePage(child: w)).toList(),
+        ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
+          onDestinationSelected: _goToTab,
           destinations: const [
             NavigationDestination(
                 icon: Icon(Icons.dashboard_outlined),
                 selectedIcon: Icon(Icons.dashboard),
                 label: 'Home'),
             NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: 'Settings'),
+                icon: Icon(Icons.tune_outlined),
+                selectedIcon: Icon(Icons.tune),
+                label: 'Manage'),
             NavigationDestination(
                 icon: Icon(Icons.assessment_outlined),
                 selectedIcon: Icon(Icons.assessment),
                 label: 'Reports'),
             NavigationDestination(
-                icon: Icon(Icons.tune_outlined),
-                selectedIcon: Icon(Icons.tune),
-                label: 'Manage'),
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: 'Settings'),
           ],
         ),
       ),
     );
+  }
+}
+
+/// Wraps a tab page in an [AutomaticKeepAliveClientMixin] state so PageView
+/// doesn't rebuild it when the user swipes away — this preserves scroll
+/// position, form input, etc. across tab transitions, matching the previous
+/// IndexedStack behaviour.
+class _KeepAlivePage extends StatefulWidget {
+  const _KeepAlivePage({required this.child});
+  final Widget child;
+
+  @override
+  State<_KeepAlivePage> createState() => _KeepAlivePageState();
+}
+
+class _KeepAlivePageState extends State<_KeepAlivePage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }
