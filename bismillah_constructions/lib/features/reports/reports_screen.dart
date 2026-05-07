@@ -3,14 +3,15 @@ import 'package:flutter/material.dart';
 import 'aging_analysis_screen.dart';
 import 'aging_receivables_screen.dart';
 import 'balance_sheet_screen.dart';
+import 'bank_ledger_screen.dart';
 import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
 import 'project_profitability_screen.dart';
 import 'supplier_ledger_picker_screen.dart';
+import 'supplier_spending_screen.dart';
 import 'wage_ledger_screen.dart';
-import 'bank_ledger_screen.dart';
 
 /// Reports landing page. Tiles are grouped into four sections so the
 /// list stays scannable as more reports get added:
@@ -118,6 +119,17 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AgingReceivablesScreen())),
+          ),
+          _SectionTitle('Operations'),
+          _ReportTile(
+            icon: Icons.bar_chart,
+            title: 'Supplier-wise Spending',
+            subtitle:
+                'Which vendors consume the most capital — material + labour combined, filterable by period',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SupplierSpendingScreen())),
           ),
           _SectionTitle('Project Analysis'),
           _ReportTile(

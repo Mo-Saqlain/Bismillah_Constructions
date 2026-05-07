@@ -1344,6 +1344,56 @@ class LedgerRepository {
     return out;
   }
 
+  // -------------------- Cash Runway --------------------
+
+  /// Average daily material + labour spend over the last [daysBack] days.
+  /// Returns 0 when there is no spending history (avoids divide-by-zero at
+  /// the call site).
+  Future<double> averageDailyExpense({int daysBack = 30}) async {
+    final cutoff = DateTime.now()
+        .toUtc()
+        .subtract(Duration(days: daysBack))
+        .toIso8601String();
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(SUM(debit), 0) AS total FROM journal_entries '
+      'WHERE is_deleted = 0 AND account_id IN (?, ?) AND debit > 0 '
+      'AND created_at >= ?',
+      [Accounts.materialCosts.id, Accounts.labourCosts.id, cutoff],
+    );
+    final total = ((rows.first['total'] as num?) ?? 0).toDouble();
+    return total / daysBack;
+  }
+
+  // -------------------- Supplier-wise Spending --------------------
+
+  /// Total material + labour costs grouped by supplier, sorted highest first.
+  /// Optional [daysBack] restricts to the last N days.
+  Future<List<SupplierSpend>> supplierSpending({int? daysBack}) async {
+    final args = <Object>[Accounts.materialCosts.id, Accounts.labourCosts.id];
+    final where = StringBuffer(
+      'account_id IN (?, ?) AND is_deleted = 0 AND debit > 0 AND supplier_id IS NOT NULL',
+    );
+    if (daysBack != null) {
+      final cutoff = DateTime.now()
+          .toUtc()
+          .subtract(Duration(days: daysBack))
+          .toIso8601String();
+      where.write(' AND created_at >= ?');
+      args.add(cutoff);
+    }
+    final rows = await _db.rawQuery(
+      'SELECT supplier_id, SUM(debit) AS total FROM journal_entries '
+      'WHERE ${where.toString()} GROUP BY supplier_id ORDER BY total DESC',
+      args,
+    );
+    return rows
+        .map((r) => SupplierSpend(
+              supplierId: r['supplier_id'] as String,
+              total: (r['total'] as num).toDouble(),
+            ))
+        .toList();
+  }
+
   // -------------------- Daily Spend --------------------
 
   /// Material + labour costs for a project grouped by calendar day (UTC date),
@@ -1498,6 +1548,12 @@ class DailySpend {
   final DateTime date;
   final double amount;
   const DailySpend({required this.date, required this.amount});
+}
+
+class SupplierSpend {
+  final String supplierId;
+  final double total;
+  const SupplierSpend({required this.supplierId, required this.total});
 }
 
 class _OpenInvoice {

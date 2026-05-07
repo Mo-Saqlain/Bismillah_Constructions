@@ -1,9 +1,11 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
 import '../../core/theme.dart';
 import '../../data/models/bank.dart';
+import '../../data/repositories/ledger_repository.dart';
 import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
@@ -20,14 +22,11 @@ class DashboardScreen extends ConsumerWidget {
     final banks = ref.watch(banksProvider);
     final recent = ref.watch(recentEntriesProvider);
     final sync = ref.watch(syncStatusProvider);
+    final runway = ref.watch(cashRunwayProvider);
+    final dailySpend = ref.watch(overallDailySpendProvider);
 
     return Scaffold(
       appBar: AppBar(
-        // Logo intentionally lives only on the launcher icon now — no
-        // leading widget here. `automaticallyImplyLeading: false` keeps
-        // Flutter from inserting a placeholder back-arrow on the root
-        // tab, so the title sits flush against the standard 16-px
-        // padding instead of being nudged off-centre.
         automaticallyImplyLeading: false,
         title: const Text('Bismillah'),
         actions: [
@@ -54,6 +53,7 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(12),
           children: [
+            // ── Treasury overview ─────────────────────────────────────────
             AsyncView(
               value: summary,
               data: (s) => Column(
@@ -64,6 +64,8 @@ class DashboardScreen extends ConsumerWidget {
                     netLiquidity: s.netLiquidity,
                     netPosition: s.netPosition,
                     netWorth: s.totalNetWorth,
+                    netProfit: s.netProfit,
+                    payables: s.payables,
                   ),
                   const SizedBox(height: 8),
                   AsyncView<List<Bank>>(
@@ -124,7 +126,28 @@ class DashboardScreen extends ConsumerWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+
+            // ── Cash Runway ───────────────────────────────────────────────
+            runway.when(
+              loading: () => const SizedBox.shrink(),
+              error: (_, _) => const SizedBox.shrink(),
+              data: (r) => _CashRunwayCard(runway: r),
+            ),
+
+            // ── 7-Day Spending ────────────────────────────────────────────
+            const SizedBox(height: 8),
+            dailySpend.when(
+              loading: () => const SizedBox.shrink(),
+              error: (_, _) => const SizedBox.shrink(),
+              data: (days) => days.isEmpty
+                  ? const SizedBox.shrink()
+                  : _DailySpendCard(days: days),
+            ),
+
             const SizedBox(height: 16),
+
+            // ── Recent Activity ───────────────────────────────────────────
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -184,21 +207,221 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Cash Runway card
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CashRunwayCard extends StatelessWidget {
+  const _CashRunwayCard({required this.runway});
+  final CashRunway runway;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color fg;
+    final String status;
+    final IconData icon;
+
+    if (runway.days == null) {
+      bg = Theme.of(context).colorScheme.surfaceContainerHighest;
+      fg = Theme.of(context).colorScheme.onSurfaceVariant;
+      status = 'No spending history yet';
+      icon = Icons.hourglass_empty;
+    } else if (runway.isGreen) {
+      bg = Colors.green.shade700;
+      fg = Colors.white;
+      status = 'Healthy — 30+ days';
+      icon = Icons.check_circle_outline;
+    } else if (runway.isYellow) {
+      bg = Colors.orange.shade700;
+      fg = Colors.white;
+      status = 'Caution — 15–30 days';
+      icon = Icons.warning_amber_outlined;
+    } else {
+      bg = Colors.red.shade700;
+      fg = Colors.white;
+      status = 'Critical — act now';
+      icon = Icons.crisis_alert;
+    }
+
+    final daysText = runway.days == null
+        ? '—'
+        : '${runway.days!.toStringAsFixed(1)} days';
+
+    return Card(
+      color: bg,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: fg, size: 32),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Cash Runway',
+                      style: TextStyle(
+                          color: fg,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5)),
+                  Text(daysText,
+                      style: TextStyle(
+                          color: fg,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                          height: 1.1)),
+                  Text(status,
+                      style: TextStyle(color: fg.withValues(alpha: 0.85), fontSize: 12)),
+                ],
+              ),
+            ),
+            if (runway.avgDailyExpense > 0)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('Avg daily burn',
+                      style: TextStyle(
+                          color: fg.withValues(alpha: 0.8), fontSize: 10)),
+                  Text(fmtMoney(runway.avgDailyExpense),
+                      style: TextStyle(
+                          color: fg, fontSize: 13, fontWeight: FontWeight.w700)),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7-Day Daily Spending bar chart
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DailySpendCard extends StatelessWidget {
+  const _DailySpendCard({required this.days});
+  final List<DailySpend> days;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxY = days.fold<double>(0, (m, d) => d.amount > m ? d.amount : m);
+    final totalSpend = days.fold<double>(0, (s, d) => s + d.amount);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('7-Day Spending',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700)),
+                Text(fmtMoney(totalSpend),
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: BalanceColors.negative(context))),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 90,
+              child: BarChart(
+                BarChartData(
+                  maxY: maxY * 1.3,
+                  barGroups: days.asMap().entries.map((e) {
+                    return BarChartGroupData(
+                      x: e.key,
+                      barRods: [
+                        BarChartRodData(
+                          toY: e.value.amount,
+                          color: e.value.amount == maxY
+                              ? Colors.red.shade400
+                              : Theme.of(context).colorScheme.primary,
+                          width: 22,
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(3)),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                  titlesData: FlTitlesData(
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 20,
+                        getTitlesWidget: (v, _) {
+                          final i = v.toInt();
+                          if (i < 0 || i >= days.length) {
+                            return const SizedBox.shrink();
+                          }
+                          final d = days[i].date.toLocal();
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '${d.day}/${d.month}',
+                              style: const TextStyle(fontSize: 9),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    leftTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  gridData: const FlGridData(show: false),
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text('Material + Labour costs only',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Treasury card — now includes profit vs cash insight
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _TreasuryCard extends StatelessWidget {
   const _TreasuryCard({
     required this.liquidCash,
     required this.netLiquidity,
     required this.netPosition,
     required this.netWorth,
+    required this.netProfit,
+    required this.payables,
   });
   final double liquidCash;
   final double netLiquidity;
   final double netPosition;
   final double netWorth;
+  final double netProfit;
+  final double payables;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+
+    // "Profit Illusion" insight: how much of the cash on hand belongs to
+    // future obligations (unpaid payables) rather than real profit.
+    final deferredLiability = liquidCash - netProfit;
+
     return Card(
       color: scheme.primaryContainer,
       child: Padding(
@@ -239,11 +462,26 @@ class _TreasuryCard extends StatelessWidget {
                     onContainer: true),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              'Net Liquidity = Liquid Cash − Supplier Payables (actual spendable).',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onPrimaryContainer.withValues(alpha: 0.85)),
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            // Profit Illusion insight row
+            Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 13,
+                    color: scheme.onPrimaryContainer.withValues(alpha: 0.7)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    deferredLiability > 0
+                        ? '${fmtMoney(deferredLiability)} of cash covers costs & payables — real profit is ${fmtMoney(netProfit)}'
+                        : 'Net Liquidity = Liquid Cash − Supplier Payables (actual spendable).',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onPrimaryContainer.withValues(alpha: 0.85)),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -284,9 +522,6 @@ class _TreasuryCell extends StatelessWidget {
   }
 }
 
-/// Color-coded grid of every wallet/bank balance. Tap a user-defined bank to
-/// open its ledger. The Cash tile is the only system wallet (display-only,
-/// since it isn't backed by a bank row).
 class _WalletGrid extends StatelessWidget {
   const _WalletGrid({
     required this.cash,
