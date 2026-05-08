@@ -858,7 +858,11 @@ class LedgerRepository {
       matCosts += mat;
       labCosts += lab;
 
-      if (pmodel == 'with_material') {
+      // Match the enum's db getter (which returns `name`) — `withMaterial`,
+      // not `with_material`. Earlier the wrong identifier here caused the
+      // WM branch to silently never run, surfacing as zero revenue and zero
+      // deposit on the dashboard / income statement.
+      if (pmodel == ProjectModel.withMaterial.db) {
         if (closed) {
           // Project complete → recognize full contract.
           if (budget > 0 && received > budget) {

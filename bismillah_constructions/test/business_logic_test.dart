@@ -1,0 +1,644 @@
+// White-box business-logic tests for the accounting changes added in this
+// session: PoC revenue recognition, smart labour-payment settlement, the
+// budget-mismatch archive gate, active-days burn rate, and the supplier
+// payable helper. Each test pokes the production code via the public repo
+// API, then asserts on the resulting journal_entries / Project state — no
+// mocks, no UI — so they double as a regression suite for the engine.
+import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'package:bismillah_constructions/core/constants.dart';
+import 'package:bismillah_constructions/data/db/local_db.dart';
+import 'package:bismillah_constructions/data/repositories/entity_repository.dart';
+import 'package:bismillah_constructions/data/repositories/ledger_repository.dart';
+
+late Database _db;
+late EntityRepository _entityRepo;
+late LedgerRepository _ledgerRepo;
+
+Future<void> _resetDb() async {
+  _db = await databaseFactoryFfi.openDatabase(
+    inMemoryDatabasePath,
+    options: OpenDatabaseOptions(
+      version: 5,
+      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+    ),
+  );
+  await LocalDb.instance.applySchemaForTests(_db);
+  await _db.insert('app_settings',
+      {'key': 'device_id', 'value': 'test-device-uuid'},
+      conflictAlgorithm: ConflictAlgorithm.replace);
+  _entityRepo = EntityRepository(_db);
+  _ledgerRepo = LedgerRepository(_db);
+}
+
+Future<String> _supplier(String name) async =>
+    (await _entityRepo.createSupplier(name: name)).id;
+
+Future<String> _project(String name,
+    {ProjectModel model = ProjectModel.withMaterial,
+    String? clientName,
+    double? budget,
+    double? serviceFeePercent}) async {
+  final p = await _entityRepo.createProject(
+    name: name,
+    model: model,
+    clientName: clientName,
+    budget: budget,
+    serviceFeePercent: serviceFeePercent,
+  );
+  return p.id;
+}
+
+void main() {
+  setUpAll(() => sqfliteFfiInit());
+  setUp(_resetDb);
+  tearDown(() async => _db.close());
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  PoC revenue recognition — incomeFigures()
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('PoC revenue recognition', () {
+    test('Active WM: 0 costs + 1M received → 0 revenue, 1M deposit', () async {
+      final pId = await _project('Site A', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmRevenue, 0,
+          reason: 'no costs incurred yet → no revenue recognized');
+      expect(f.wmDeposit, 1000000,
+          reason: 'received money is a deposit liability until earned');
+      expect(f.netProfit, 0,
+          reason: 'no fake profit from advance customer payments');
+    });
+
+    test('Active WM: 500K costs + 1M received → 500K revenue, 500K deposit',
+        () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 500000, projectId: pId, supplierId: sId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmRevenue, 500000,
+          reason: 'cost-recovery: revenue tracks costs');
+      expect(f.wmDeposit, 500000,
+          reason: 'unearned excess sits as deposit');
+      expect(f.matCosts, 500000);
+      expect(f.netProfit, 0,
+          reason: 'gross profit not booked until project closes');
+    });
+
+    test('Active WM: costs == received → revenue == costs, no deposit',
+        () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 800000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 800000, projectId: pId, supplierId: sId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmRevenue, 800000);
+      expect(f.wmDeposit, 0);
+    });
+
+    test('Closed WM: archive recognizes full contract revenue', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1000000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 600000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postSupplierPay(
+          amount: 600000,
+          supplierId: sId,
+          paidFrom: Accounts.cash,
+          projectId: pId);
+      await _entityRepo.archiveProject(pId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmRevenue, 1000000,
+          reason: 'closed project recognizes full received as revenue');
+      expect(f.wmDeposit, 0);
+      // Net profit = 1M revenue − 600K costs = 400K
+      expect(f.netProfit, 400000);
+    });
+
+    test('Loss provision: costs > budget books the excess immediately',
+        () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Tight Site', budget: 100000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 100000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 150000, projectId: pId, supplierId: sId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      // Costs (150K) > budget (100K) → 50K loss provision recognized
+      expect(f.lossProvision, 50000,
+          reason: 'GAAP/IFRS: future losses booked the moment they are probable');
+      expect(f.totalCosts, greaterThanOrEqualTo(150000 + 50000));
+    });
+
+    test('No loss provision when costs ≤ budget', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Healthy Site', budget: 1000000);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 500000, projectId: pId, supplierId: sId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.lossProvision, 0);
+    });
+
+    test('Projects at risk: ≥ 80% threshold, sorted by severity', () async {
+      final sId = await _supplier('Steelco');
+      final low = await _project('Low Use', budget: 100000);
+      final medium = await _project('Approaching', budget: 100000);
+      final over = await _project('Over Budget', budget: 100000);
+
+      // 50% — below threshold, not at risk
+      await _ledgerRepo.postMaterialBuy(
+          amount: 50000, projectId: low, supplierId: sId);
+      // 85% — at risk warning
+      await _ledgerRepo.postMaterialBuy(
+          amount: 85000, projectId: medium, supplierId: sId);
+      // 130% — over budget
+      await _ledgerRepo.postMaterialBuy(
+          amount: 130000, projectId: over, supplierId: sId);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.projectsAtRisk.length, 2,
+          reason: 'only ≥80% projects appear');
+      expect(f.projectsAtRisk.first.isOverBudget, true,
+          reason: 'over-budget items sorted first');
+      expect(f.projectsAtRisk.first.projectId, over);
+      expect(f.projectsAtRisk[1].projectId, medium);
+      expect(f.projectsAtRisk.any((r) => r.projectId == low), false);
+    });
+
+    test('Labour-Rate: deposit owed back when received > costs', () async {
+      final sId = await _supplier('Workforce');
+      final pId = await _project('Labour Site',
+          model: ProjectModel.labourRate,
+          clientName: 'Acme',
+          serviceFeePercent: 10);
+
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 500000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postLabourPayment(
+          amount: 300000,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      final f = await _ledgerRepo.incomeFigures();
+      // 500K received − 300K costs = 200K residual still owed back to customer
+      expect(f.lrDeposit, 200000);
+      // Service fee not yet posted — still 0
+      expect(f.serviceFees, 0);
+    });
+
+    test('Mixed WM + LR: aggregates both correctly', () async {
+      final sId1 = await _supplier('Steelco');
+      final sId2 = await _supplier('Workforce');
+      final wm = await _project('WM Site', budget: 1000000);
+      final lr = await _project('LR Site',
+          model: ProjectModel.labourRate, serviceFeePercent: 10);
+
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 800000, projectId: wm, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 200000, projectId: wm, supplierId: sId1);
+
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 300000, projectId: lr, receivedInto: Accounts.cash);
+      await _ledgerRepo.postLabourPayment(
+          amount: 250000,
+          projectId: lr,
+          supplierId: sId2,
+          paidFrom: Accounts.cash);
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmRevenue, 200000, reason: 'PoC: only matched-by-cost portion');
+      expect(f.wmDeposit, 600000, reason: 'WM excess as deposit');
+      expect(f.lrDeposit, 50000, reason: 'LR residual after costs');
+      expect(f.matCosts, 200000);
+      expect(f.labCosts, 250000);
+    });
+
+    test('Per-project filtering: incomeFigures(projectId) scopes correctly',
+        () async {
+      final sId = await _supplier('Steelco');
+      final p1 = await _project('Site 1', budget: 100000);
+      final p2 = await _project('Site 2', budget: 200000);
+
+      await _ledgerRepo.postMaterialBuy(
+          amount: 30000, projectId: p1, supplierId: sId);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 50000, projectId: p2, supplierId: sId);
+
+      final scoped = await _ledgerRepo.incomeFigures(projectId: p1);
+      expect(scoped.matCosts, 30000,
+          reason: 'project filter excludes other projects');
+      // Personal draw is null when scoped to a single project
+      expect(scoped.personalDraw, 0);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  postLabourPayment — smart settlement of outstanding wage credit
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('postLabourPayment smart settlement', () {
+    test('No outstanding credit: posts direct labour cost', () async {
+      final sId = await _supplier('Worker A');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postLabourPayment(
+          amount: 1000,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      final labour = await _ledgerRepo.accountBalance(Accounts.labourCosts.id);
+      final payable = await _ledgerRepo.supplierPayableBalance(sId);
+      expect(labour, 1000, reason: 'direct labour cost booked');
+      expect(payable, 0, reason: 'no payable touched');
+    });
+
+    test('Payment ≤ owed: settles payable, NO new labour cost', () async {
+      final sId = await _supplier('Worker B');
+      final pId = await _project('Site A');
+
+      // Record 1500 wages on credit first.
+      await _ledgerRepo.postLabourCredit(
+          amount: 1500, projectId: pId, supplierId: sId);
+      // Then pay exactly 1500.
+      await _ledgerRepo.postLabourPayment(
+          amount: 1500,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      final labour = await _ledgerRepo.accountBalance(Accounts.labourCosts.id);
+      final payable = await _ledgerRepo.supplierPayableBalance(sId);
+      expect(labour, 1500,
+          reason: 'cost was booked at credit time — should NOT double up');
+      expect(payable, 0,
+          reason: 'payment fully settles the outstanding wage');
+    });
+
+    test('Payment > owed: settles + books excess as new direct cost',
+        () async {
+      final sId = await _supplier('Worker C');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postLabourCredit(
+          amount: 1000, projectId: pId, supplierId: sId);
+      // Pay 1500 — settles 1000 + 500 new cost.
+      await _ledgerRepo.postLabourPayment(
+          amount: 1500,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      final labour = await _ledgerRepo.accountBalance(Accounts.labourCosts.id);
+      final payable = await _ledgerRepo.supplierPayableBalance(sId);
+      expect(labour, 1500, reason: '1000 from credit + 500 new');
+      expect(payable, 0, reason: 'old credit fully settled');
+    });
+
+    test('Partial payment: settles payable up to amount, no new cost',
+        () async {
+      final sId = await _supplier('Worker D');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postLabourCredit(
+          amount: 2000, projectId: pId, supplierId: sId);
+      // Pay only 800 — settles 800 of the 2000 owed, no new cost.
+      await _ledgerRepo.postLabourPayment(
+          amount: 800,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      final labour = await _ledgerRepo.accountBalance(Accounts.labourCosts.id);
+      final payable = await _ledgerRepo.supplierPayableBalance(sId);
+      expect(labour, 2000, reason: 'cost stays at original credit amount');
+      expect(payable, 1200, reason: '2000 owed − 800 paid = 1200 still owed');
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Archive gate — Budget vs Received mismatch (With-Material)
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('Budget-mismatch archive gate', () {
+    test('WM received < budget → ProjectBudgetMismatchException', () async {
+      final pId = await _project('Underpaid', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+
+      expect(
+        () => _entityRepo.archiveProject(pId),
+        throwsA(isA<ProjectBudgetMismatchException>()
+            .having((e) => e.budget, 'budget', 1500000)
+            .having((e) => e.received, 'received', 1000000)
+            .having((e) => e.shortfall, 'shortfall', 500000)),
+      );
+    });
+
+    test('WM received == budget → archives cleanly', () async {
+      final pId = await _project('Exact', budget: 500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 500000, projectId: pId, receivedInto: Accounts.cash);
+
+      await _entityRepo.archiveProject(pId);
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true);
+    });
+
+    test('WM received > budget (overpayment) → archives, deposit owed back',
+        () async {
+      final pId = await _project('Overpaid', budget: 500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 700000, projectId: pId, receivedInto: Accounts.cash);
+
+      await _entityRepo.archiveProject(pId);
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true,
+          reason: 'overpayment is allowed — excess is a deposit liability');
+
+      final f = await _ledgerRepo.incomeFigures();
+      expect(f.wmDeposit, 200000,
+          reason: 'excess over budget is owed back to customer');
+    });
+
+    test('WM with no budget set → no gate, archives freely', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('No budget'); // budget = null
+      await _ledgerRepo.postMaterialBuy(
+          amount: 1000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postSupplierPay(
+          amount: 1000,
+          supplierId: sId,
+          paidFrom: Accounts.cash,
+          projectId: pId);
+
+      await _entityRepo.archiveProject(pId);
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true);
+    });
+
+    test('Labour-Rate ignores budget gate even when underpaid', () async {
+      final sId = await _supplier('Workforce');
+      final pId = await _project('LR Site',
+          model: ProjectModel.labourRate,
+          clientName: 'Acme',
+          serviceFeePercent: 10,
+          budget: 1000000);
+      // Customer paid less than budget — LR doesn't care about budget.
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 500000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postLabourPayment(
+          amount: 500000,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      await _entityRepo.archiveProject(pId);
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true);
+    });
+
+    test('Open supplier payable still blocks WM archive', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 100000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 100000, projectId: pId, receivedInto: Accounts.cash);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 50000, projectId: pId, supplierId: sId);
+      // Note: supplier NOT paid → 50k still owed.
+
+      expect(
+        () => _entityRepo.archiveProject(pId),
+        throwsA(isA<ReconciliationException>()),
+      );
+    });
+
+    test('force: true bypasses both gates', () async {
+      final pId = await _project('Underpaid', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+
+      // Should NOT throw with force=true (used by data-repair flows).
+      await _entityRepo.archiveProject(pId, force: true);
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Burn rate — averageDailyExpense uses ACTIVE days
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('averageDailyExpense (active-days)', () {
+    test('Single day of activity: total / 1 (not / 30)', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postMaterialBuy(
+          amount: 18000, projectId: pId, supplierId: sId);
+
+      final burn = await _ledgerRepo.averageDailyExpense();
+      expect(burn, 18000,
+          reason: 'one active day → that day IS the average');
+    });
+
+    test('No spending in window: 0 burn', () async {
+      final burn = await _ledgerRepo.averageDailyExpense();
+      expect(burn, 0,
+          reason: 'no activity → no division-by-zero, returns 0');
+    });
+
+    test('Multiple distinct days: total / distinct days', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+      final today = DateTime.now().toUtc();
+
+      // Backdated rows on three different days within the 30-day window.
+      Future<void> backdated(double amt, int daysAgo) async {
+        final ts = today.subtract(Duration(days: daysAgo)).toIso8601String();
+        final txnId = 'bd-$daysAgo';
+        await _db.insert('journal_entries', {
+          'id': '$txnId-dr',
+          'transaction_id': txnId,
+          'account_id': Accounts.materialCosts.id,
+          'project_id': pId,
+          'supplier_id': sId,
+          'debit': amt,
+          'credit': 0,
+          'created_at': ts,
+          'is_deleted': 0,
+          'synced': 0,
+        });
+        await _db.insert('journal_entries', {
+          'id': '$txnId-cr',
+          'transaction_id': txnId,
+          'account_id': Accounts.supplierPayables.id,
+          'project_id': pId,
+          'supplier_id': sId,
+          'debit': 0,
+          'credit': amt,
+          'created_at': ts,
+          'is_deleted': 0,
+          'synced': 0,
+        });
+      }
+
+      await backdated(1000, 1);
+      await backdated(2000, 5);
+      await backdated(3000, 10);
+
+      final burn = await _ledgerRepo.averageDailyExpense();
+      expect(burn, 6000 / 3,
+          reason: 'total 6000 over 3 active days → 2000/day average');
+    });
+
+    test('Soft-deleted rows excluded from burn rate', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+
+      final txnId = await _ledgerRepo.postMaterialBuy(
+          amount: 5000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.softDeleteTransaction(txnId);
+
+      final burn = await _ledgerRepo.averageDailyExpense();
+      expect(burn, 0, reason: 'deleted txns must not feed the rate');
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  supplierPayableBalance — per-supplier scoping
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('supplierPayableBalance', () {
+    test('Material buy raises balance, supplier pay clears it', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 0);
+
+      await _ledgerRepo.postMaterialBuy(
+          amount: 2500, projectId: pId, supplierId: sId);
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 2500);
+
+      await _ledgerRepo.postSupplierPay(
+          amount: 1000,
+          supplierId: sId,
+          paidFrom: Accounts.cash,
+          projectId: pId);
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 1500);
+    });
+
+    test('Overpayment yields negative balance (we paid too much)', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postMaterialBuy(
+          amount: 1000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postSupplierPay(
+          amount: 1500,
+          supplierId: sId,
+          paidFrom: Accounts.cash,
+          projectId: pId);
+
+      expect(await _ledgerRepo.supplierPayableBalance(sId), -500,
+          reason: 'overpayment shows up as negative payable (an asset)');
+    });
+
+    test('Different suppliers tracked separately', () async {
+      final s1 = await _supplier('Steelco');
+      final s2 = await _supplier('Cementry');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postMaterialBuy(
+          amount: 1000, projectId: pId, supplierId: s1);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 2000, projectId: pId, supplierId: s2);
+
+      expect(await _ledgerRepo.supplierPayableBalance(s1), 1000);
+      expect(await _ledgerRepo.supplierPayableBalance(s2), 2000);
+    });
+
+    test('Soft-deleted entries excluded', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A');
+
+      final txnId = await _ledgerRepo.postMaterialBuy(
+          amount: 1000, projectId: pId, supplierId: sId);
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 1000);
+
+      await _ledgerRepo.softDeleteTransaction(txnId);
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 0);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  End-to-end: the user's exact reported scenarios
+  // ───────────────────────────────────────────────────────────────────────
+
+  group('End-to-end regression scenarios', () {
+    test('User scenario: 1500 labour-on-credit + 1500 labour-payment → 0 owed',
+        () async {
+      // Reproduces the exact bug the user reported on 2026-05-08.
+      final sId = await _supplier('Worker');
+      final pId = await _project('Site A');
+
+      await _ledgerRepo.postLabourCredit(
+          amount: 1500, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postLabourPayment(
+          amount: 1500,
+          projectId: pId,
+          supplierId: sId,
+          paidFrom: Accounts.cash);
+
+      // BEFORE fix: labour=3000, payable=1500 (worker still showing 1500 owed).
+      // AFTER fix : labour=1500, payable=0.
+      expect(await _ledgerRepo.accountBalance(Accounts.labourCosts.id), 1500);
+      expect(await _ledgerRepo.supplierPayableBalance(sId), 0);
+    });
+
+    test('User scenario: 1.5M budget, 1M received, archive → mismatch dialog',
+        () async {
+      final pId = await _project('Site A', budget: 1500000);
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+
+      // The exception path the UI catches to show the "set budget to received"
+      // dialog.
+      Object? caught;
+      try {
+        await _entityRepo.archiveProject(pId);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught, isA<ProjectBudgetMismatchException>());
+      final mm = caught as ProjectBudgetMismatchException;
+      expect(mm.shortfall, 500000);
+
+      // Simulate the UI's "set budget to received" remediation path.
+      await _entityRepo.updateProjectFields(pId, budget: mm.received);
+      await _entityRepo.archiveProject(pId);
+
+      final p = await _entityRepo.project(pId);
+      expect(p!.archived, true);
+      expect(p.budget, 1000000);
+    });
+  });
+}
