@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../parties/banks_screen.dart';
 import '../parties/parties_screen.dart';
 import '../projects/projects_screen.dart';
-import '../settings/material_types_screen.dart';
 import 'labour_types_screen.dart';
+import 'material_types_screen.dart';
 
 /// "Manage" tab — landing page that gathers the four entity-management
 /// screens (Materials, Wallets/Banks, Suppliers, Projects) under a single

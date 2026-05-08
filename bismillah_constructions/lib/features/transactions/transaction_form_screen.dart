@@ -11,7 +11,7 @@ import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../manage/labour_types_screen.dart';
-import '../settings/material_types_screen.dart';
+import '../manage/material_types_screen.dart';
 
 class TransactionFormScreen extends ConsumerStatefulWidget {
   const TransactionFormScreen({super.key, required this.kind});

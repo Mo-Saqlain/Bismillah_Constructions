@@ -6,19 +6,30 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 import 'core/app_restart.dart';
 import 'core/constants.dart';
+import 'core/error_reporter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Log Flutter framework errors (null dereferences, layout overflows, etc.)
+  // Test-phase error visibility: every framework / async error is routed
+  // to [ErrorReporter] which (a) keeps an in-memory log the user can
+  // browse from Settings → Recent Errors and (b) pops a SnackBar so the
+  // failure is visible right away. During the trial week the user wants
+  // to see what's going wrong, not have errors silently swallowed.
+
+  // Flutter framework errors (null deref, layout overflow, etc.).
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    debugPrint('FlutterError: ${details.exceptionAsString()}');
+    ErrorReporter.report(
+      details.exceptionAsString(),
+      stack: details.stack,
+      source: 'FlutterError',
+    );
   };
 
-  // Catch errors thrown outside the Flutter widget tree (async callbacks, etc.)
+  // Async errors that escape the widget tree (futures, isolates, etc.).
   PlatformDispatcher.instance.onError = (error, stack) {
-    debugPrint('Unhandled error: $error\n$stack');
+    ErrorReporter.report(error, stack: stack, source: 'Async');
     return true; // mark handled so the app doesn't crash
   };
 
@@ -30,7 +41,16 @@ Future<void> main() async {
   }
 
   // Replace the default red crash screen with a compact error card.
-  ErrorWidget.builder = (details) => _ErrorCard(message: details.exceptionAsString());
+  // Also funnel the error into the reporter so the SnackBar fires and the
+  // failure shows up in Recent Errors.
+  ErrorWidget.builder = (details) {
+    ErrorReporter.report(
+      details.exceptionAsString(),
+      stack: details.stack,
+      source: 'ErrorWidget',
+    );
+    return _ErrorCard(message: details.exceptionAsString());
+  };
 
   // Wrapping ProviderScope in a ValueListenableBuilder keyed to
   // appRestartNotifier lets the auto-restore flow trigger a full

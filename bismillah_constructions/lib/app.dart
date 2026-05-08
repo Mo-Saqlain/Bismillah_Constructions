@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/error_reporter.dart';
 import 'core/theme.dart';
 import 'features/common/restore_gateway.dart';
 import 'providers/providers.dart';
@@ -22,6 +23,9 @@ class BismillahApp extends ConsumerWidget {
     return MaterialApp(
       title: 'Bismillah',
       debugShowCheckedModeBanner: false,
+      // Global key so [ErrorReporter] can pop SnackBars from anywhere
+      // (including async error handlers that have no BuildContext).
+      scaffoldMessengerKey: ErrorReporter.messengerKey,
       themeMode: mode,
       theme: buildTheme(brightness: Brightness.light),
       darkTheme: buildTheme(brightness: Brightness.dark),

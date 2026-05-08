@@ -1,0 +1,90 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../core/constants.dart';
+import '../data/models/bank.dart';
+import '../data/models/counter_entity.dart';
+import '../data/models/labour_type_def.dart';
+import '../data/models/material_type_def.dart';
+import '../data/models/party.dart';
+import '../data/models/project.dart';
+import 'db_providers.dart';
+
+final projectsProvider = FutureProvider<List<Project>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.projects();
+});
+
+final activeProjectsProvider = FutureProvider<List<Project>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.projects(activeOnly: true);
+});
+
+final archivedProjectsProvider = FutureProvider<List<Project>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedProjects();
+});
+
+final suppliersProvider = FutureProvider<List<Party>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.suppliers();
+});
+
+final archivedSuppliersProvider = FutureProvider<List<Party>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedSuppliers();
+});
+
+final banksProvider = FutureProvider<List<Bank>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.banks();
+});
+
+final archivedBanksProvider = FutureProvider<List<Bank>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedBanks();
+});
+
+/// Cash-like accounts for the transaction form / dashboard.
+/// Combines the system Cash + Supervisor Float with every user-defined bank.
+final cashLikeAccountsProvider =
+    FutureProvider<List<Account>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final banks = await ref.watch(banksProvider.future);
+  return [
+    ...Accounts.systemCashLike,
+    ...banks.map(
+      (b) => Account(b.id, b.name, AccountType.asset),
+    ),
+  ];
+});
+
+final counterEntitiesProvider =
+    FutureProvider<List<CounterEntity>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.counterEntities();
+});
+
+/// User-defined material categories. Bumping [ledgerVersionProvider]
+/// after add/delete refreshes the dropdown everywhere that watches this
+/// list.
+final materialTypesProvider =
+    FutureProvider<List<MaterialTypeDef>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.materialTypes();
+});
+
+final labourTypesProvider =
+    FutureProvider<List<LabourTypeDef>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.labourTypes();
+});

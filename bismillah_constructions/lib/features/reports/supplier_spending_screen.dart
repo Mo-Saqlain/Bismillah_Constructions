@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/formatters.dart';
 import '../../data/repositories/ledger_repository.dart';
 import '../../providers/providers.dart';
-import 'csv_export.dart';
+import '../../core/export/csv_export.dart';
 
 /// Horizontal-bar breakdown of every supplier ranked by total spend
 /// (material costs + labour costs combined). The bar length is proportional

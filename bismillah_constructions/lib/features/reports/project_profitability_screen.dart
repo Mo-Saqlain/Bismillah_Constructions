@@ -7,7 +7,7 @@ import '../../core/formatters.dart';
 import '../../core/theme.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
-import 'csv_export.dart';
+import '../../core/export/csv_export.dart';
 
 /// Project Profitability Summary — one row per project with the
 /// bottom-line numbers an owner cares about: revenue received, money

@@ -1,1 +1,42 @@
 test_cases_urdu.txt
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.vscode/
+.idea/
+*.iml
+
+# Editor scratch / temp
+*.tmp
+*.bak
+*~
+
+# Logs
+*.log
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Backup artefacts a user may drop at the workspace root by accident
+solo_con_*.db
+*.before_import
+*.before_rollback
+
+# Flutter project subdirectory artefacts (defence-in-depth in case the
+# subproject's own .gitignore is removed). The subproject's own
+# .gitignore is the authoritative source.
+bismillah_constructions/.dart_tool/
+bismillah_constructions/.flutter-plugins
+bismillah_constructions/.flutter-plugins-dependencies
+bismillah_constructions/build/
+bismillah_constructions/coverage/
+
+# Claude / AI tool caches and personal scratch
+.claude/local/
+**/.claude.local.json

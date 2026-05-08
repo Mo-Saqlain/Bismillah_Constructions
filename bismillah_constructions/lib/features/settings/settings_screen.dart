@@ -11,6 +11,7 @@ import '../../core/formatters.dart';
 import '../../providers/providers.dart';
 import 'backups_list_screen.dart';
 import 'change_log_screen.dart';
+import 'recent_errors_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -383,6 +384,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const ChangeLogScreen()),
+              ),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: Icon(Icons.bug_report_outlined,
+                  color: Theme.of(context).colorScheme.error),
+              title: const Text('Recent Errors'),
+              subtitle: const Text(
+                  'In-app log of framework, async and widget errors '
+                  'caught this session.'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const RecentErrorsScreen()),
               ),
             ),
           ),
