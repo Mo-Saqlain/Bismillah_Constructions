@@ -107,15 +107,33 @@ class _CashFlowScreenState extends ConsumerState<CashFlowScreen> {
         ['Opening Cash', '', s.openingCash.toStringAsFixed(2)],
         ['', '', ''],
         ['OPERATING ACTIVITIES', '', ''],
-        ['', 'Receipts from projects (in)',
-            s.operatingInflow.toStringAsFixed(2)],
-        ['', 'Cash paid for materials, labour, suppliers (out)',
-            (-s.operatingOutflow).toStringAsFixed(2)],
+        if (s.projectInflow != 0)
+          ['', 'Received from projects (in)',
+              s.projectInflow.toStringAsFixed(2)],
+        if (s.serviceFeeInflow != 0)
+          ['', 'Service-fee receipts (in)',
+              s.serviceFeeInflow.toStringAsFixed(2)],
+        if (s.equityInflow != 0)
+          ['', 'Opening bank balances (in)',
+              s.equityInflow.toStringAsFixed(2)],
+        if (s.materialOutflow != 0)
+          ['', 'Cash-bought material (out)',
+              (-s.materialOutflow).toStringAsFixed(2)],
+        if (s.labourOutflow != 0)
+          ['', 'Labour paid in cash (out)',
+              (-s.labourOutflow).toStringAsFixed(2)],
+        if (s.supplierPayOutflow != 0)
+          ['', 'Supplier settlements (out)',
+              (-s.supplierPayOutflow).toStringAsFixed(2)],
         ['', 'Net cash from operating', s.netOperating.toStringAsFixed(2)],
         ['', '', ''],
         ['FINANCING ACTIVITIES', '', ''],
-        ['', 'Personal / owner draws (out)',
-            (-s.financingOutflow).toStringAsFixed(2)],
+        if (s.personalDrawOutflow != 0)
+          ['', 'Personal / owner draws (out)',
+              (-s.personalDrawOutflow).toStringAsFixed(2)],
+        if (s.equityOutflow != 0)
+          ['', 'Equity withdrawals (out)',
+              (-s.equityOutflow).toStringAsFixed(2)],
         ['', 'Net cash from financing', s.netFinancing.toStringAsFixed(2)],
         ['', '', ''],
         if (s.otherNet != 0) ...[
@@ -167,18 +185,37 @@ class _SummaryCard extends StatelessWidget {
             _line(context, 'Opening Cash', summary.openingCash, bold: true),
             const Divider(),
             _section(context, 'Operating Activities'),
-            _line(context, '  Receipts from projects (in)',
-                summary.operatingInflow),
-            _line(
-                context,
-                '  Material / labour / supplier payments (out)',
-                -summary.operatingOutflow),
+            // Inflows, line by line. Skip zero rows so the report stays
+            // tight on businesses that don't use every channel.
+            if (summary.projectInflow != 0)
+              _line(context, '  Received from projects (in)',
+                  summary.projectInflow),
+            if (summary.serviceFeeInflow != 0)
+              _line(context, '  Service-fee receipts (in)',
+                  summary.serviceFeeInflow),
+            if (summary.equityInflow != 0)
+              _line(context, '  Opening bank balances (in)',
+                  summary.equityInflow),
+            // Outflows.
+            if (summary.materialOutflow != 0)
+              _line(context, '  Cash-bought material (out)',
+                  -summary.materialOutflow),
+            if (summary.labourOutflow != 0)
+              _line(context, '  Labour paid in cash (out)',
+                  -summary.labourOutflow),
+            if (summary.supplierPayOutflow != 0)
+              _line(context, '  Supplier settlements (out)',
+                  -summary.supplierPayOutflow),
             _line(context, '  Net cash from operating', summary.netOperating,
                 bold: true),
             const SizedBox(height: 8),
             _section(context, 'Financing Activities'),
-            _line(context, '  Personal / owner draws (out)',
-                -summary.financingOutflow),
+            if (summary.personalDrawOutflow != 0)
+              _line(context, '  Personal / owner draws (out)',
+                  -summary.personalDrawOutflow),
+            if (summary.equityOutflow != 0)
+              _line(context, '  Equity withdrawals (out)',
+                  -summary.equityOutflow),
             _line(context, '  Net cash from financing', summary.netFinancing,
                 bold: true),
             if (summary.otherNet != 0) ...[

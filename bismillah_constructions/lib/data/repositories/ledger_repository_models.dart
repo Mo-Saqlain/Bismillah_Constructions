@@ -79,11 +79,20 @@ class ProjectAtRisk {
 /// All `*flow` and `*Outflow` numbers are stored as positive values;
 /// the sign is implicit from the field name. `netChange` walks
 /// opening cash → closing cash through the bucketed activity totals.
+///
+/// The high-level fields (`operatingInflow`, `operatingOutflow`,
+/// `financingOutflow`) are sums of the per-category breakdown fields —
+/// they're kept so older callers don't have to change, but the
+/// statement screen now renders the breakdown for a more useful report.
 class CashFlowSummary {
   /// Cash position at the moment the period opened (sum of all cash-like
   /// account balances right before `from`). Zero when no `from` is set.
   final double openingCash;
+
+  /// Aggregate operating inflow = projectInflow + serviceFeeInflow.
   final double operatingInflow;
+  /// Aggregate operating outflow = materialOutflow + labourOutflow +
+  /// supplierPayOutflow.
   final double operatingOutflow;
   final double financingOutflow;
 
@@ -91,12 +100,42 @@ class CashFlowSummary {
   /// canonical buckets — e.g. legacy data, manual journal corrections.
   final double otherNet;
 
+  // ── Per-category breakdown ──────────────────────────────────────────
+  /// Cash received against Project Revenue (`postReceiveFromProject`).
+  final double projectInflow;
+  /// Cash received against Service Fee Income (`postServiceFee` —
+  /// labour-rate one-off fee receipts).
+  final double serviceFeeInflow;
+  /// Cash paid out directly against Material Costs (counter purchases).
+  final double materialOutflow;
+  /// Cash paid out directly against Labour Costs (`postLabourPayment`
+  /// when no outstanding wage credit, plus the excess leg when the
+  /// payment is larger than what was owed).
+  final double labourOutflow;
+  /// Cash paid out settling supplier payables (`postSupplierPay` and the
+  /// smart-settle leg of labour payment).
+  final double supplierPayOutflow;
+  /// Cash paid out as Personal / Owner Draw.
+  final double personalDrawOutflow;
+  /// Bank/wallet opening-balance cash recorded against Owner's Equity,
+  /// split into "money came in" vs "money was drawn against equity".
+  final double equityInflow;
+  final double equityOutflow;
+
   const CashFlowSummary({
     required this.openingCash,
     required this.operatingInflow,
     required this.operatingOutflow,
     required this.financingOutflow,
     required this.otherNet,
+    this.projectInflow = 0,
+    this.serviceFeeInflow = 0,
+    this.materialOutflow = 0,
+    this.labourOutflow = 0,
+    this.supplierPayOutflow = 0,
+    this.personalDrawOutflow = 0,
+    this.equityInflow = 0,
+    this.equityOutflow = 0,
   });
 
   static const empty = CashFlowSummary(

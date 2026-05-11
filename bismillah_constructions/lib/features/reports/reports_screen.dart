@@ -31,38 +31,6 @@ class ReportsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          _SectionTitle('Financial Statements'),
-          _ReportTile(
-            icon: Icons.trending_up,
-            color: Colors.green,
-            title: 'Income Statement (P&L)',
-            subtitle: 'Revenue minus material and labour costs',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const IncomeStatementScreen())),
-          ),
-          _ReportTile(
-            icon: Icons.account_balance,
-            color: Colors.blue,
-            title: 'Balance Sheet',
-            subtitle: 'Assets vs Liabilities + Equity',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const BalanceSheetScreen())),
-          ),
-          _ReportTile(
-            icon: Icons.swap_vert,
-            color: Colors.deepPurple,
-            title: 'Cash Flow Statement',
-            subtitle:
-                'Operating, financing and net cash movement across all projects',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const CashFlowScreen())),
-          ),
           _SectionTitle('Ledgers'),
           _ReportTile(
             icon: Icons.receipt_long,
@@ -106,6 +74,40 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const ProjectLedgerPickerScreen())),
+          ),
+          _SectionTitle('Financial Statements'),
+          _ReportTile(
+            icon: Icons.trending_up,
+            color: Colors.green,
+            title: 'Income Statement (P&L)',
+            subtitle:
+                'Revenue, material costs by type, labour costs by worker, '
+                'loss provision and net profit',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const IncomeStatementScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.account_balance,
+            color: Colors.blue,
+            title: 'Balance Sheet',
+            subtitle: 'Assets vs Liabilities + Equity',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const BalanceSheetScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.swap_vert,
+            color: Colors.deepPurple,
+            title: 'Cash Flow Statement',
+            subtitle:
+                'Operating and financing cash movement broken down by category',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const CashFlowScreen())),
           ),
           _SectionTitle('Aging'),
           _ReportTile(

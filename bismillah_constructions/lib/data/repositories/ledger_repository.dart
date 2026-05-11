@@ -787,7 +787,17 @@ class LedgerRepository {
       args,
     );
 
-    double opIn = 0, opOut = 0, finOut = 0, other = 0;
+    // Per-category buckets. Aggregate `opIn / opOut / finOut` are sums of
+    // these so the legacy getters still work.
+    double projectInflow = 0;
+    double serviceFeeInflow = 0;
+    double materialOutflow = 0;
+    double labourOutflow = 0;
+    double supplierPayOutflow = 0;
+    double personalDrawOutflow = 0;
+    double equityInflow = 0;
+    double equityOutflow = 0;
+    double other = 0;
 
     for (final row in cashRows) {
       final txnId = row['transaction_id'] as String;
@@ -812,21 +822,24 @@ class LedgerRepository {
 
       switch (otherAccount) {
         case 'PROJECT_REV':
+          projectInflow += delta;
         case 'SERVICE_FEE':
-          opIn += delta; // cash in from operations
+          serviceFeeInflow += delta;
         case 'MATERIAL_COSTS':
+          materialOutflow += -delta;
         case 'LABOUR_COSTS':
+          labourOutflow += -delta;
         case 'SUPPLIER_PAY':
-          opOut += -delta; // outflow stored as positive number
+          supplierPayOutflow += -delta;
         case 'PERSONAL_DRAW':
-          finOut += -delta;
+          personalDrawOutflow += -delta;
         case 'OWNERS_EQUITY':
-          // Opening balance for a bank: counts as financing inflow if cash
-          // came in, or financing outflow if money was drawn against equity.
+          // Opening balance for a bank: counts as equity inflow if cash
+          // came in, or equity outflow if money was drawn against equity.
           if (delta >= 0) {
-            opIn += delta;
+            equityInflow += delta;
           } else {
-            finOut += -delta;
+            equityOutflow += -delta;
           }
         default:
           other += delta;
@@ -836,10 +849,23 @@ class LedgerRepository {
     final opening = await openingBalance();
     return CashFlowSummary(
       openingCash: opening,
-      operatingInflow: opIn,
-      operatingOutflow: opOut,
-      financingOutflow: finOut,
+      // Aggregate fields kept for backwards-compat with any caller that
+      // still reads the high-level totals. Equity inflow rolls into
+      // operating inflow as before (it's customer-money arriving via an
+      // initial deposit), and equity outflow into financing.
+      operatingInflow: projectInflow + serviceFeeInflow + equityInflow,
+      operatingOutflow:
+          materialOutflow + labourOutflow + supplierPayOutflow,
+      financingOutflow: personalDrawOutflow + equityOutflow,
       otherNet: other,
+      projectInflow: projectInflow,
+      serviceFeeInflow: serviceFeeInflow,
+      materialOutflow: materialOutflow,
+      labourOutflow: labourOutflow,
+      supplierPayOutflow: supplierPayOutflow,
+      personalDrawOutflow: personalDrawOutflow,
+      equityInflow: equityInflow,
+      equityOutflow: equityOutflow,
     );
   }
 
@@ -982,6 +1008,98 @@ class LedgerRepository {
       lossProvision: lossProvision,
       projectsAtRisk: atRisk,
     );
+  }
+
+  /// Material costs grouped by `material_type`, suitable as a P&L
+  /// breakdown. Sourced from `material_inventory` so each type rolls up
+  /// every purchase (counter + credit). Soft- or hard-deleted entries
+  /// are excluded automatically (v13 linkage).
+  ///
+  /// Returns a `(byType, untracked)` tuple — `untracked` is any
+  /// material-costs spend in `journal_entries` that has no
+  /// corresponding `material_inventory` row (legacy data, or unusual
+  /// posting paths) so the breakdown reconciles with the total.
+  Future<({Map<String, double> byType, double untracked})>
+      materialCostsByType({
+    DateTime? from,
+    DateTime? to,
+    String? projectId,
+  }) async {
+    final where = StringBuffer(
+        'txn_type = ? AND is_deleted = 0');
+    final args = <Object>[MaterialTxnType.purchase.db];
+    if (projectId != null) {
+      where.write(' AND project_id = ?');
+      args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
+    final rows = await _db.rawQuery(
+      'SELECT material_type, SUM(total_cost) AS s '
+      'FROM material_inventory '
+      'WHERE ${where.toString()} '
+      'GROUP BY material_type',
+      args,
+    );
+    final byType = <String, double>{};
+    for (final r in rows) {
+      final label = resolveMaterialLabel(r['material_type'] as String);
+      byType[label] =
+          (byType[label] ?? 0) + ((r['s'] as num?) ?? 0).toDouble();
+    }
+    // Reconcile against the journal aggregate so a missing inventory
+    // row doesn't make the breakdown silently understate total spend.
+    final journalTotal = await accountBalance(
+      Accounts.materialCosts.id,
+      projectId: projectId,
+      from: from,
+      to: to,
+    );
+    final tracked = byType.values.fold<double>(0, (a, b) => a + b);
+    final untracked = (journalTotal - tracked).clamp(0, double.infinity);
+    return (byType: byType, untracked: untracked.toDouble());
+  }
+
+  /// Labour costs grouped by supplier (worker), suitable as a P&L
+  /// breakdown. Each entry is `(supplierId, totalDebit)`. Soft-deleted
+  /// rows are excluded.
+  Future<Map<String, double>> labourCostsBySupplier({
+    DateTime? from,
+    DateTime? to,
+    String? projectId,
+  }) async {
+    final where = StringBuffer(
+        'account_id = ? AND debit > 0 AND is_deleted = 0 '
+        'AND supplier_id IS NOT NULL');
+    final args = <Object>[Accounts.labourCosts.id];
+    if (projectId != null) {
+      where.write(' AND project_id = ?');
+      args.add(projectId);
+    }
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
+    }
+    final rows = await _db.rawQuery(
+      'SELECT supplier_id, SUM(debit) AS s FROM journal_entries '
+      'WHERE ${where.toString()} '
+      'GROUP BY supplier_id',
+      args,
+    );
+    return {
+      for (final r in rows)
+        (r['supplier_id'] as String): ((r['s'] as num?) ?? 0).toDouble(),
+    };
   }
 
   /// Sum(debit) - sum(credit). Always excludes soft-deleted rows. Optional

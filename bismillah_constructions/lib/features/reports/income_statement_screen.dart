@@ -25,16 +25,44 @@ class _IncomeStatementScreenState
   DateTime? _from;
   DateTime? _to;
 
-  /// Defers all heavy lifting to [LedgerRepository.incomeFigures], which
-  /// implements cost-recovery PoC and the loss-provision rule. This keeps
-  /// the screen thin and the Income Statement, dashboard and BvA in
-  /// agreement on what counts as recognized revenue.
-  Future<IncomeFigures> _figures(WidgetRef ref) async {
+  /// Bundles the headline PoC P&L from [LedgerRepository.incomeFigures]
+  /// with the two breakdowns (material by type, labour by supplier) plus
+  /// a supplier name lookup so the screen can render real names instead
+  /// of UUIDs.
+  Future<_DetailedFigures> _figures(WidgetRef ref) async {
     final repo = await ref.read(ledgerRepoProvider.future);
-    return repo.incomeFigures(
+    final entityRepo = await ref.read(entityRepoProvider.future);
+
+    final figures = await repo.incomeFigures(
       from: _from,
       to: _to,
       projectId: _projectId,
+    );
+    final mat = await repo.materialCostsByType(
+      from: _from,
+      to: _to,
+      projectId: _projectId,
+    );
+    final lab = await repo.labourCostsBySupplier(
+      from: _from,
+      to: _to,
+      projectId: _projectId,
+    );
+
+    // Map supplier ids to display names. Include archived suppliers so
+    // older transactions still resolve to a real label.
+    final active = await entityRepo.suppliers();
+    final archived = await entityRepo.archivedSuppliers();
+    final nameMap = <String, String>{
+      for (final s in [...active, ...archived]) s.id: s.name,
+    };
+
+    return _DetailedFigures(
+      figures: figures,
+      materialByType: mat.byType,
+      materialUntracked: mat.untracked,
+      labourBySupplier: lab,
+      supplierNames: nameMap,
     );
   }
 
@@ -75,7 +103,7 @@ class _IncomeStatementScreenState
             ),
           ),
           const SizedBox(height: 16),
-          FutureBuilder<IncomeFigures>(
+          FutureBuilder<_DetailedFigures>(
             key: ValueKey(
                 '$_projectId-$version-${_from?.toIso8601String()}-${_to?.toIso8601String()}'),
             future: figuresFuture,
@@ -86,7 +114,8 @@ class _IncomeStatementScreenState
                   child: Center(child: CircularProgressIndicator()),
                 );
               }
-              final f = snap.data!;
+              final d = snap.data!;
+              final f = d.figures;
               final totalIncome = f.totalIncome;
               final totalCosts = f.totalCosts;
               final net = f.netProfit;
@@ -117,8 +146,29 @@ class _IncomeStatementScreenState
                               bold: true),
                           const Divider(),
                           // ── Costs ────────────────────────────────────────
-                          _row(context, 'Material Costs', -f.matCosts),
-                          _row(context, 'Labour Costs', -f.labCosts),
+                          _row(context, 'Material Costs', -f.matCosts,
+                              bold: true),
+                          // Material breakdown: one sub-line per type,
+                          // plus an "Untracked" line for material spend
+                          // that hit Material Costs in the journal but
+                          // doesn't have a matching material_inventory
+                          // row (legacy / direct posts).
+                          ..._sortedByValueDesc(d.materialByType).map((e) =>
+                              _row(context, '    ${e.key}', -e.value)),
+                          if (d.materialUntracked > 0)
+                            _row(context,
+                                '    Untracked (no inventory row)',
+                                -d.materialUntracked),
+                          _row(context, 'Labour Costs', -f.labCosts,
+                              bold: true),
+                          // Labour breakdown by worker. Skip when no
+                          // entries — keeps the report tight on
+                          // material-only projects.
+                          ..._sortedByValueDesc(d.labourBySupplier)
+                              .map((e) => _row(
+                                  context,
+                                  '    ${d.supplierNames[e.key] ?? e.key.substring(0, e.key.length.clamp(0, 8))}',
+                                  -e.value)),
                           if (f.personalDraw > 0)
                             _row(context, 'Personal Draw', -f.personalDraw),
                           if (f.lossProvision > 0)
@@ -222,8 +272,21 @@ class _IncomeStatementScreenState
                               ['', ''],
                               ['Material Costs',
                                   (-f.matCosts).toStringAsFixed(2)],
+                              for (final e
+                                  in _sortedByValueDesc(d.materialByType))
+                                ['    ${e.key}',
+                                    (-e.value).toStringAsFixed(2)],
+                              if (d.materialUntracked > 0)
+                                ['    Untracked (no inventory row)',
+                                    (-d.materialUntracked).toStringAsFixed(2)],
                               ['Labour Costs',
                                   (-f.labCosts).toStringAsFixed(2)],
+                              for (final e
+                                  in _sortedByValueDesc(d.labourBySupplier))
+                                [
+                                  '    ${d.supplierNames[e.key] ?? e.key}',
+                                  (-e.value).toStringAsFixed(2)
+                                ],
                               if (f.personalDraw > 0)
                                 ['Personal Draw',
                                     (-f.personalDraw).toStringAsFixed(2)],
@@ -283,6 +346,43 @@ class _IncomeStatementScreenState
       ),
     );
   }
+
+  /// Stable order for the breakdown sub-rows: biggest spend first, then
+  /// alphabetical on ties. Yields list entries so the spread operator
+  /// can splice them straight into the column children.
+  List<MapEntry<String, double>> _sortedByValueDesc(Map<String, double> m) {
+    final entries = m.entries.toList()
+      ..sort((a, b) {
+        final byVal = b.value.compareTo(a.value);
+        if (byVal != 0) return byVal;
+        return a.key.compareTo(b.key);
+      });
+    return entries;
+  }
+}
+
+/// Bundle that pairs the canonical PoC P&L from [IncomeFigures] with the
+/// finer-grained breakdowns the Income Statement screen renders as
+/// indented sub-rows.
+class _DetailedFigures {
+  final IncomeFigures figures;
+  /// Material Costs split by `material_type`.
+  final Map<String, double> materialByType;
+  /// Material-Costs spend in the journal that has no matching
+  /// `material_inventory` row (legacy data or unusual posts).
+  final double materialUntracked;
+  /// Labour Costs split by supplier id (worker).
+  final Map<String, double> labourBySupplier;
+  /// Supplier-id → display-name map covering active + archived.
+  final Map<String, String> supplierNames;
+
+  const _DetailedFigures({
+    required this.figures,
+    required this.materialByType,
+    required this.materialUntracked,
+    required this.labourBySupplier,
+    required this.supplierNames,
+  });
 }
 
 /// Banner shown above the Income Statement when one or more projects are
