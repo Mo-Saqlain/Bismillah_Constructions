@@ -805,10 +805,19 @@ class EntityRepository {
   }
 
   Future<List<MaterialItem>> materialInventory({String? projectId}) async {
+    // Excludes rows whose parent journal txn has been soft- or hard-
+    // deleted (v13 linkage). Add an `includeDeleted` flag here if a
+    // future audit screen needs to show them.
+    final whereClauses = <String>['is_deleted = 0'];
+    final args = <Object>[];
+    if (projectId != null) {
+      whereClauses.add('project_id = ?');
+      args.add(projectId);
+    }
     final rows = await _db.query(
       'material_inventory',
-      where: projectId != null ? 'project_id = ?' : null,
-      whereArgs: projectId != null ? [projectId] : null,
+      where: whereClauses.join(' AND '),
+      whereArgs: args,
       orderBy: 'created_at DESC',
     );
     return rows.map(MaterialItem.fromMap).toList();

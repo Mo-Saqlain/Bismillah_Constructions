@@ -145,76 +145,64 @@ class _ProjectReconciliationScreenState
     }
   }
 
+  /// Surfaced when the user tries to archive a WM project whose customer
+  /// has paid less than the agreed budget. Intentionally informational
+  /// only — no one-tap "resize budget" escape hatch here, because that
+  /// made it too easy to silently shrink a contract just to get the
+  /// project off the active list. The user has two legitimate paths:
+  ///
+  ///   1. Record the missing payment (Receive from Project) and retry
+  ///      archive — the normal "the customer hasn't paid in full yet"
+  ///      case.
+  ///   2. If the customer has genuinely abandoned the contract, edit the
+  ///      project's budget from Manage → Projects → Edit (the change is
+  ///      logged to change_log so the audit trail shows the contract
+  ///      shrunk and by whom), then retry archive.
+  ///
+  /// Both paths require deliberate action; archive can no longer happen
+  /// by accident from a single dialog tap.
   Future<void> _handleBudgetMismatch(
       ProjectBudgetMismatchException e) async {
-    final confirm = await showDialog<bool>(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         icon: Icon(Icons.compare_arrows,
-            color: Theme.of(ctx).colorScheme.primary, size: 36),
-        title: const Text('Customer paid less than budget'),
+            color: Theme.of(ctx).colorScheme.error, size: 36),
+        title: const Text('Customer hasn\'t paid the full budget'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Original budget:  ${fmtMoney(e.budget)}'),
+            Text('Contract budget:  ${fmtMoney(e.budget)}'),
             const SizedBox(height: 4),
             Text('Total received:   ${fmtMoney(e.received)}'),
             const SizedBox(height: 4),
-            Text('Shortfall:        ${fmtMoney(e.shortfall)}',
+            Text('Still owed:       ${fmtMoney(e.shortfall)}',
                 style: TextStyle(
                     fontWeight: FontWeight.w700,
                     color: BalanceColors.negative(context))),
             const SizedBox(height: 12),
-            const Text(
-                'To close this project, the contract value should match what '
-                'was actually received. Resize the budget to ${"​"}'
-                'the received amount and archive?'),
+            const Text('This project can\'t be archived until the customer '
+                'pays the full contract value. Two ways forward:'),
             const SizedBox(height: 8),
-            Text(
-                'If you expect more money to come in, cancel and record '
-                'the remaining payment first.',
-                style: Theme.of(ctx).textTheme.bodySmall),
+            const Text(
+                '1.  Record the remaining payment via + → Receive from '
+                'Project, then try archive again.'),
+            const SizedBox(height: 4),
+            const Text(
+                '2.  If the customer has genuinely abandoned the contract, '
+                'go to Manage → Projects → Edit and change the budget to '
+                'match what was actually received. The change is logged. '
+                'Then retry archive.'),
           ],
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Set budget to ${fmtMoney(e.received)}')),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK')),
         ],
       ),
     );
-    if (confirm != true) return;
-
-    setState(() => _busy = true);
-    try {
-      final entityRepo = await ref.read(entityRepoProvider.future);
-      await entityRepo.updateProjectFields(
-        widget.project.id,
-        budget: e.received,
-      );
-      await entityRepo.archiveProject(
-        widget.project.id,
-        note: 'Budget resized to match received and archived',
-      );
-      bumpLedger(ref);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Budget adjusted and project archived.')));
-        Navigator.pop(context);
-      }
-    } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $err')));
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
 
   @override

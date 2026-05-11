@@ -471,6 +471,14 @@ class LedgerRepository {
         where: 'transaction_id = ?',
         whereArgs: [transactionId],
       );
+      // Mirror the deletion on material_inventory so price-trend and
+      // BvA stop counting the deleted purchase. v13 added the column.
+      await txn.update(
+        'material_inventory',
+        {'is_deleted': 1, 'deleted_at': now.toIso8601String()},
+        where: 'transaction_id = ?',
+        whereArgs: [transactionId],
+      );
       await txn.insert(
           'change_log',
           ChangeLog(
@@ -503,6 +511,11 @@ class LedgerRepository {
     await _db.transaction((txn) async {
       await txn.delete('journal_entries',
           where: 'transaction_id = ?', whereArgs: [transactionId]);
+      // Hard-deleting the journal txn must also drop the inventory row
+      // for the same transaction, otherwise the Material Price Trend
+      // and Budget vs Actual keep showing the orphaned purchase.
+      await txn.delete('material_inventory',
+          where: 'transaction_id = ?', whereArgs: [transactionId]);
       await txn.insert(
           'change_log',
           ChangeLog(
@@ -532,6 +545,13 @@ class LedgerRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'journal_entries',
+        {'is_deleted': 0, 'deleted_at': null},
+        where: 'transaction_id = ?',
+        whereArgs: [transactionId],
+      );
+      // Mirror restore on the inventory side.
+      await txn.update(
+        'material_inventory',
         {'is_deleted': 0, 'deleted_at': null},
         where: 'transaction_id = ?',
         whereArgs: [transactionId],
@@ -1547,9 +1567,12 @@ class LedgerRepository {
         await sumDebits(Accounts.labourCosts.id, projectId: projectId);
 
     // Split material by type via material_inventory totals.
+    // `is_deleted = 0` keeps the breakdown in sync with the ledger when
+    // a material buy is soft-deleted (v13 linkage).
     final matRows = await _db.rawQuery(
       'SELECT material_type, SUM(total_cost) AS s '
-      'FROM material_inventory WHERE project_id = ? AND txn_type = ? '
+      'FROM material_inventory '
+      'WHERE project_id = ? AND txn_type = ? AND is_deleted = 0 '
       'GROUP BY material_type',
       [projectId, MaterialTxnType.purchase.db],
     );
@@ -1579,9 +1602,12 @@ class LedgerRepository {
     final cutoff = DateTime.now()
         .toUtc()
         .subtract(Duration(days: 30 * monthsBack));
+    // `is_deleted = 0` keeps the trend in sync with the ledger after a
+    // material buy is soft- or hard-deleted (v13 linkage).
     final rows = await _db.rawQuery(
       'SELECT material_type, rate, created_at '
-      'FROM material_inventory WHERE txn_type = ? AND created_at >= ? '
+      'FROM material_inventory '
+      'WHERE txn_type = ? AND created_at >= ? AND is_deleted = 0 '
       'ORDER BY created_at ASC',
       [MaterialTxnType.purchase.db, cutoff.toIso8601String()],
     );

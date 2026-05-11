@@ -632,7 +632,9 @@ void main() {
       final mm = caught as ProjectBudgetMismatchException;
       expect(mm.shortfall, 500000);
 
-      // Simulate the UI's "set budget to received" remediation path.
+      // Backend remediation path: user resizes the budget (now done via
+      // Manage → Edit Project rather than the archive dialog) and tries
+      // archive again.
       await _entityRepo.updateProjectFields(pId, budget: mm.received);
       await _entityRepo.archiveProject(pId);
 
@@ -690,6 +692,103 @@ void main() {
       final r = await _ledgerRepo.receivablesTotals();
       expect(r.projectsOwed, 0,
           reason: 'prepayment of 1M still covers the 300K of costs');
+    });
+
+    test(
+        'Material price trend / BvA: soft delete hides the inventory row',
+        () async {
+      // User's reported scenario: buy material, then soft-delete the
+      // transaction. The price-trend chart should NOT keep showing the
+      // deleted purchase, and BvA should drop it from its breakdown.
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1000000);
+
+      // Log a purchase directly via the entity repo so we can attach a
+      // real transaction_id to the inventory row, mirroring the form's
+      // happy path.
+      final txnId = await _ledgerRepo.postMaterialBuy(
+          amount: 50000, projectId: pId, supplierId: sId);
+      await _entityRepo.logMaterialPurchase(
+        projectId: pId,
+        supplierId: sId,
+        transactionId: txnId,
+        materialType: 'Brick',
+        price: 50000,
+        quantity: 2500,
+      );
+
+      // Pre-delete: the trend has 1 data point, BvA shows 50K of Brick.
+      var trend = await _ledgerRepo.priceTrend();
+      expect(trend['Brick']?.length, 1);
+      var bva = await _ledgerRepo.projectBva(pId);
+      expect(bva.materialByType['Brick'], 50000);
+
+      // Soft delete.
+      await _ledgerRepo.softDeleteTransaction(txnId);
+
+      // Post-delete: both surfaces must drop the row.
+      trend = await _ledgerRepo.priceTrend();
+      expect(trend['Brick'], anyOf(isNull, isEmpty),
+          reason:
+              'soft delete must remove the inventory row from price trend');
+      bva = await _ledgerRepo.projectBva(pId);
+      expect(bva.materialByType['Brick'], anyOf(isNull, 0),
+          reason: 'soft delete must remove the inventory row from BvA');
+    });
+
+    test(
+        'Material price trend / BvA: hard delete drops the inventory row',
+        () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1000000);
+      final txnId = await _ledgerRepo.postMaterialBuy(
+          amount: 30000, projectId: pId, supplierId: sId);
+      await _entityRepo.logMaterialPurchase(
+        projectId: pId,
+        supplierId: sId,
+        transactionId: txnId,
+        materialType: 'Cement',
+        price: 30000,
+        quantity: 60,
+      );
+
+      await _ledgerRepo.hardDeleteTransaction(txnId);
+
+      final trend = await _ledgerRepo.priceTrend();
+      expect(trend['Cement'], anyOf(isNull, isEmpty),
+          reason:
+              'hard delete must physically remove the inventory row');
+      final bva = await _ledgerRepo.projectBva(pId);
+      expect(bva.materialByType['Cement'], anyOf(isNull, 0));
+
+      // And the inventory listing must not return the row either.
+      final inv = await _entityRepo.materialInventory(projectId: pId);
+      expect(inv.where((i) => i.transactionId == txnId), isEmpty);
+    });
+
+    test('Restore brings the inventory row back to price trend / BvA',
+        () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1000000);
+      final txnId = await _ledgerRepo.postMaterialBuy(
+          amount: 40000, projectId: pId, supplierId: sId);
+      await _entityRepo.logMaterialPurchase(
+        projectId: pId,
+        supplierId: sId,
+        transactionId: txnId,
+        materialType: 'Sarya',
+        price: 40000,
+        quantity: 200,
+      );
+
+      await _ledgerRepo.softDeleteTransaction(txnId);
+      await _ledgerRepo.restoreTransaction(txnId);
+
+      final trend = await _ledgerRepo.priceTrend();
+      expect(trend['Sarya']?.length, 1,
+          reason: 'restore re-enables the inventory row');
+      final bva = await _ledgerRepo.projectBva(pId);
+      expect(bva.materialByType['Sarya'], 40000);
     });
 
     test(

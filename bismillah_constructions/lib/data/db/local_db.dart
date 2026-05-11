@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 12);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 13);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 12,
+        version: 13,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -141,6 +141,11 @@ class LocalDb {
         total_cost REAL NOT NULL,
         txn_type TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        -- v13: soft-delete flag linked to the parent journal txn so the
+        -- price-trend and BvA reports stay in sync with the ledger
+        -- when the user soft-deletes a material buy.
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         FOREIGN KEY (project_id) REFERENCES projects(id),
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
       )
@@ -496,6 +501,24 @@ class LocalDb {
       await db.execute('DROP TABLE material_inventory');
       await db.execute(
           'ALTER TABLE material_inventory_v12 RENAME TO material_inventory');
+    }
+
+    if (oldVersion < 13) {
+      // v13: link material_inventory to the parent journal txn's
+      // deletion state. Before this, soft-deleting (or hard-deleting) a
+      // material buy left the corresponding `material_inventory` row
+      // intact — so the Budget vs Actual breakdown and Material Price
+      // Trend continued to show the deleted purchase. The new column
+      // and the matching changes in soft/hard delete + restore fix
+      // that.
+      for (final ddl in const [
+        'ALTER TABLE material_inventory ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE material_inventory ADD COLUMN deleted_at TEXT',
+      ]) {
+        try {
+          await db.execute(ddl);
+        } catch (_) {/* column may already exist on partial upgrades */}
+      }
     }
 
     if (oldVersion < 3) {
