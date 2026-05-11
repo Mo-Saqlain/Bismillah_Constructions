@@ -168,9 +168,14 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
             rows: ledgerRows,
             totalLabel: 'Net Outstanding',
             totalValue: total,
-            // Colourise the running balance: blue when positive (payable
-            // to supplier), red when negative (we overpaid them).
+            // Colourise from the business-owner perspective: positive
+            // balance (we owe the supplier — a liability) renders red;
+            // negative balance (we overpaid them — an asset) renders
+            // green. `invertColorSign` flips the sign used for the color
+            // because the raw arithmetic convention (`credit − debit`)
+            // is the opposite of what's good for us.
             signedTotal: true,
+            invertColorSign: true,
             emptyMessage: 'No transactions with this supplier in the period.',
             headerBelowTitle: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

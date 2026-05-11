@@ -621,26 +621,36 @@ class EntityRepository {
 
   // ---- Material Inventory ----
 
-  /// New (post-quantity-removal): the form collects only price + memo, so
-  /// inventory rows record `quantity = 1`, `rate = price`, `unit = lump`.
-  /// Callers that still need the legacy quantity/rate flow can pass them
-  /// explicitly.
+  /// Records a material purchase against [material_inventory].
+  ///
+  /// Quantity / unit / rate are now mandatory at the UI layer so the
+  /// price-trend report has real per-unit data to work with — but the
+  /// repository still accepts the legacy fallback (`quantity = 1`,
+  /// `unit = lump`, `rate = price`) when callers don't have those fields.
+  ///
+  /// `supplierId` is nullable: counter-purchase rows aren't tied to a
+  /// supplier. Schema v12 made the column nullable to support this.
   Future<MaterialItem> logMaterialPurchase({
     required String projectId,
-    required String supplierId,
+    String? supplierId,
     String? transactionId,
     required String materialType,
     required double price,
+    double? quantity,
+    MaterialUnit? unit,
   }) async {
+    final double qty =
+        (quantity != null && quantity > 0) ? quantity : 1.0;
+    final u = unit ?? MaterialUnit.lump;
     final item = MaterialItem(
       id: _uuid.v4(),
       projectId: projectId,
       supplierId: supplierId,
       transactionId: transactionId,
       materialType: materialType,
-      unit: MaterialUnit.lump,
-      quantity: 1,
-      rate: price,
+      unit: u,
+      quantity: qty,
+      rate: price / qty,
       totalCost: price,
       txnType: MaterialTxnType.purchase,
       createdAt: DateTime.now().toUtc(),

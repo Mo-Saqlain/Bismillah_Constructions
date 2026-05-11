@@ -163,6 +163,7 @@ extension MaterialTxnTypeX on MaterialTxnType {
 /// Canonical transaction types — money flows in or out of a project.
 enum TxnKind {
   materialBuy,         // Dr Material Costs / Cr Supplier Payables (project mandatory)
+  materialCounter,     // Dr Material Costs / Cr Cash|Bank (counter purchase, no supplier)
   labourPayment,       // Dr Labour Costs / Cr Cash|Bank  (project mandatory)
   labourCredit,        // Dr Labour Costs / Cr Supplier Payables (wages incurred but not yet paid)
   supplierPay,         // Dr Supplier Payables / Cr Cash|Bank
@@ -175,9 +176,10 @@ enum TxnKind {
 extension TxnKindX on TxnKind {
   String get label => switch (this) {
         TxnKind.materialBuy => 'Material Buy (Credit)',
+        TxnKind.materialCounter => 'Material Buy (Counter Purchase)',
         TxnKind.labourPayment => 'Labour Payment',
         TxnKind.labourCredit => 'Labour on Credit',
-        TxnKind.supplierPay => 'Supplier / Worker Payment',
+        TxnKind.supplierPay => 'Supplier Payment',
         TxnKind.receiveFromProject => 'Receive from Project',
         TxnKind.walletTransfer => 'Wallet Transfer',
         TxnKind.personalDraw => 'Personal / Owner Draw',
@@ -186,6 +188,8 @@ extension TxnKindX on TxnKind {
   String get blurb => switch (this) {
         TxnKind.materialBuy =>
           'Buy material on credit from a supplier (project required)',
+        TxnKind.materialCounter =>
+          'Pay for material on the spot from cash or bank — no supplier credit; project required',
         TxnKind.labourPayment =>
           'Pay a labour provider for a project (project required)',
         TxnKind.labourCredit =>

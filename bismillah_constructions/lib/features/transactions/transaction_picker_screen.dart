@@ -36,9 +36,16 @@ class TransactionPickerScreen extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
           final kind = _visibleKinds[i];
+          final color = _colorFor(kind);
           return Card(
             child: ListTile(
-              leading: CircleAvatar(child: Icon(_iconFor(kind))),
+              leading: CircleAvatar(
+                // Soft tinted background + saturated foreground icon, same
+                // pattern as the Reports and Manage tiles so the New
+                // Transaction list is scannable at a glance.
+                backgroundColor: color.withValues(alpha: 0.15),
+                child: Icon(_iconFor(kind), color: color),
+              ),
               title: Text(kind.label,
                   style: const TextStyle(fontWeight: FontWeight.w600)),
               subtitle: Text(kind.blurb),
@@ -58,6 +65,10 @@ class TransactionPickerScreen extends StatelessWidget {
 
   IconData _iconFor(TxnKind k) => switch (k) {
         TxnKind.materialBuy => Icons.inventory_2,
+        // materialCounter isn't in _visibleKinds (it's accessed via the
+        // Material Buy form's counter-purchase toggle), but the switch
+        // has to be exhaustive over the enum.
+        TxnKind.materialCounter => Icons.point_of_sale,
         TxnKind.labourPayment => Icons.engineering,
         TxnKind.labourCredit => Icons.handyman,
         TxnKind.supplierPay => Icons.payments,
@@ -65,5 +76,21 @@ class TransactionPickerScreen extends StatelessWidget {
         TxnKind.walletTransfer => Icons.swap_horiz,
         TxnKind.personalDraw => Icons.shopping_bag,
         TxnKind.serviceFee => Icons.percent,
+      };
+
+  /// Per-kind accent so each row is visually distinct. Grouped intuitively:
+  /// material → orange/amber tones, labour → blue tones, money-in → green,
+  /// settlement/transfer → indigo/teal, draw → red (because cash leaving
+  /// the business for non-construction use is worth a visual flag).
+  Color _colorFor(TxnKind k) => switch (k) {
+        TxnKind.materialBuy => Colors.deepOrange,
+        TxnKind.materialCounter => Colors.amber.shade800,
+        TxnKind.labourPayment => Colors.blue.shade700,
+        TxnKind.labourCredit => Colors.indigo,
+        TxnKind.supplierPay => Colors.teal.shade700,
+        TxnKind.receiveFromProject => Colors.green.shade700,
+        TxnKind.walletTransfer => Colors.cyan.shade700,
+        TxnKind.personalDraw => Colors.red.shade700,
+        TxnKind.serviceFee => Colors.purple,
       };
 }

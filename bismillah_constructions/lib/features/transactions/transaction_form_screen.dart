@@ -38,6 +38,13 @@ class _TransactionFormScreenState
   String? _labourTypeName;
   bool _saving = false;
 
+  /// When the user ticks "Counter purchase" on the Material Buy form, the
+  /// posting switches from `postMaterialBuy` (Dr Material Costs / Cr
+  /// Supplier Payables) to `postMaterialCounter` (Dr Material Costs / Cr
+  /// Cash|Bank). No supplier is attached; the cash-like account is asked
+  /// for instead.
+  bool _counterPurchase = false;
+
   TxnKind get _k => widget.kind;
   bool get _isMaterialBuy => _k == TxnKind.materialBuy;
   bool get _isWalletTransfer => _k == TxnKind.walletTransfer;
@@ -58,25 +65,33 @@ class _TransactionFormScreenState
 
   bool get _needsOptionalProject => _k == TxnKind.supplierPay;
 
-  bool get _needsSupplier => switch (_k) {
-        TxnKind.materialBuy ||
-        TxnKind.supplierPay ||
-        TxnKind.labourPayment ||
-        TxnKind.labourCredit =>
-          true,
-        _ => false,
-      };
+  bool get _needsSupplier {
+    // Counter purchases skip the supplier — no credit relationship.
+    if (_isMaterialBuy && _counterPurchase) return false;
+    return switch (_k) {
+      TxnKind.materialBuy ||
+      TxnKind.supplierPay ||
+      TxnKind.labourPayment ||
+      TxnKind.labourCredit =>
+        true,
+      _ => false,
+    };
+  }
 
-  bool get _needsCashLike => switch (_k) {
-        TxnKind.labourPayment ||
-        TxnKind.supplierPay ||
-        TxnKind.receiveFromProject ||
-        TxnKind.walletTransfer ||
-        TxnKind.personalDraw ||
-        TxnKind.serviceFee =>
-          true,
-        _ => false,
-      };
+  bool get _needsCashLike {
+    // Counter purchases pay directly from cash/bank — ask for the source.
+    if (_isMaterialBuy && _counterPurchase) return true;
+    return switch (_k) {
+      TxnKind.labourPayment ||
+      TxnKind.supplierPay ||
+      TxnKind.receiveFromProject ||
+      TxnKind.walletTransfer ||
+      TxnKind.personalDraw ||
+      TxnKind.serviceFee =>
+        true,
+      _ => false,
+    };
+  }
 
   @override
   void dispose() {
@@ -109,30 +124,70 @@ class _TransactionFormScreenState
           if (_materialType == null) {
             throw StateError('Pick a material type first.');
           }
-          // Build description: "15 Each · memo" (quantity+unit prepended if entered)
           final types = await ref.read(materialTypesProvider.future);
           final selType =
               types.firstWhereOrNull((t) => t.name == _materialType);
           final uom = selType?.uom ?? '';
-          final qtyRaw = _quantityCtrl.text.trim();
-          final qtyStr = qtyRaw.isNotEmpty
-              ? '$qtyRaw${uom.isNotEmpty ? ' $uom' : ''}'
-              : '';
+          // Quantity is mandatory at this point — the field validator
+          // enforced it before _save() could run.
+          final qty = double.parse(_quantityCtrl.text.trim());
+          final unitPrice = amount / qty;
+          // Strip a trailing ".0" so "100.0 bag" reads as "100 bag".
+          String trimZero(double v) {
+            final s = v.toStringAsFixed(2);
+            return s.endsWith('.00')
+                ? s.substring(0, s.length - 3)
+                : (s.endsWith('0') ? s.substring(0, s.length - 1) : s);
+          }
+          final qtyStr =
+              '${trimZero(qty)}${uom.isNotEmpty ? ' $uom' : ''}';
+          final unitPriceStr = uom.isNotEmpty
+              ? '@ Rs ${trimZero(unitPrice)}/$uom'
+              : '@ Rs ${trimZero(unitPrice)}';
+          // Every material-buy ledger row will now read e.g.
+          //   "Cement · 100 bag · @ Rs 1,000/bag · for foundation"
+          // — so qty + unit price are visible in every ledger view
+          // without joining material_inventory at query time.
           final fullMemo =
-              [if (qtyStr.isNotEmpty) qtyStr, ?desc].join(' · ');
-          txnId = await ledger.postMaterialBuy(
-              amount: amount,
-              projectId: _projectId!,
-              supplierId: _supplierId!,
-              description: fullMemo.isEmpty ? null : fullMemo);
+              [_materialType!, qtyStr, unitPriceStr, ?desc].join(' · ');
+
+          // Branch on the counter-purchase toggle. Both paths book the
+          // cost against Material Costs + log the inventory row with the
+          // quantity / per-unit rate the user entered. The difference is
+          // just the credit side: Supplier Payables (credit) vs Cash/Bank
+          // (counter purchase).
+          if (_counterPurchase) {
+            txnId = await ledger.postMaterialCounter(
+                amount: amount,
+                projectId: _projectId!,
+                paidFrom: _cashLike!,
+                description: fullMemo);
+          } else {
+            txnId = await ledger.postMaterialBuy(
+                amount: amount,
+                projectId: _projectId!,
+                supplierId: _supplierId!,
+                description: fullMemo);
+          }
           final entityRepo = await ref.read(entityRepoProvider.future);
           await entityRepo.logMaterialPurchase(
             projectId: _projectId!,
-            supplierId: _supplierId!,
+            supplierId: _counterPurchase ? null : _supplierId,
             transactionId: txnId,
             materialType: _materialType!,
             price: amount,
+            quantity: qty,
+            unit: selType?.uom != null
+                ? MaterialUnitX.fromDb(selType!.uom!)
+                : null,
           );
+        case TxnKind.materialCounter:
+          // Not picker-exposed today (counter purchases come in via the
+          // Material Buy form with the toggle on), but keep a stub here
+          // so the switch exhaustiveness check stays happy and a future
+          // direct entry point can land cleanly.
+          throw StateError(
+              'Use Material Buy with the counter-purchase toggle.');
         case TxnKind.labourPayment:
           final memo = [
             if (_labourTypeName != null && _labourTypeName!.isNotEmpty)
@@ -239,7 +294,9 @@ class _TransactionFormScreenState
                   onChanged: (v) => setState(() => _materialType = v),
                 ),
                 const SizedBox(height: 12),
-                // Quantity field — label adapts to the selected type's unit.
+                // Quantity is now mandatory — the price-trend report
+                // depends on having a real per-unit rate. The label adapts
+                // to the selected type's unit of measure.
                 materialTypes.when(
                   loading: () => const SizedBox.shrink(),
                   error: (e, st) => const SizedBox.shrink(),
@@ -247,6 +304,7 @@ class _TransactionFormScreenState
                     final sel = types.firstWhereOrNull(
                         (t) => t.name == _materialType);
                     final uom = sel?.uom;
+                    final hasUom = uom != null && uom.isNotEmpty;
                     return TextFormField(
                       controller: _quantityCtrl,
                       keyboardType: const TextInputType.numberWithOptions(
@@ -256,15 +314,51 @@ class _TransactionFormScreenState
                             RegExp(r'[0-9.]')),
                       ],
                       decoration: InputDecoration(
-                        labelText: uom != null && uom.isNotEmpty
-                            ? 'Quantity ($uom)'
-                            : 'Quantity (optional)',
-                        helperText: uom != null && uom.isNotEmpty
+                        labelText: hasUom
+                            ? 'Quantity ($uom) *'
+                            : 'Quantity *',
+                        helperText: hasUom
                             ? 'How many $uom purchased'
-                            : 'Unit of measure not set for this material type',
+                            : 'Set a unit of measure for this material type '
+                              'in Manage → Material Types',
                       ),
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) {
+                          return 'Quantity is required';
+                        }
+                        final n = double.tryParse(v.trim());
+                        if (n == null || n <= 0) {
+                          return 'Must be greater than zero';
+                        }
+                        return null;
+                      },
                     );
                   },
+                ),
+                const SizedBox(height: 12),
+                // Counter-purchase toggle — paid from cash/bank, no
+                // supplier credit.
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: SwitchListTile(
+                    title: const Text('Counter purchase'),
+                    subtitle: const Text(
+                        'Paid on the spot from cash or bank — no supplier credit'),
+                    value: _counterPurchase,
+                    onChanged: (v) => setState(() {
+                      _counterPurchase = v;
+                      if (v) {
+                        // Clear the supplier so leftover state doesn't
+                        // leak into the post.
+                        _supplierId = null;
+                      } else {
+                        // And clear the cash-like account when switching
+                        // back to credit, otherwise stale state confuses
+                        // _save().
+                        _cashLike = null;
+                      }
+                    }),
+                  ),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -529,6 +623,10 @@ class _RoutingSummary extends StatelessWidget {
         TxnKind.materialBuy => (
             dr: Accounts.materialCosts.name,
             cr: Accounts.supplierPayables.name
+          ),
+        TxnKind.materialCounter => (
+            dr: Accounts.materialCosts.name,
+            cr: 'Cash / Bank'
           ),
         TxnKind.labourPayment => (
             dr: Accounts.labourCosts.name,

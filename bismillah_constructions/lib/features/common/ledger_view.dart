@@ -41,6 +41,7 @@ class LedgerView extends StatelessWidget {
     this.balanceHeader = 'Balance',
     this.emptyMessage = 'No transactions yet.',
     this.signedTotal = false,
+    this.invertColorSign = false,
     this.headerBelowTitle,
   });
 
@@ -66,10 +67,23 @@ class LedgerView extends StatelessWidget {
   final double totalValue;
 
   /// When true, the total is rendered with a +/- prefix and tinted
-  /// blue/red. Use for ledgers where the sign of the total is meaningful
-  /// (project net debit position, bank balance). Suppliers should leave
-  /// this false (their payables are always positive).
+  /// emerald/rose. Use for ledgers where the sign of the total is
+  /// meaningful (project net debit position, bank balance, supplier
+  /// payable balance).
   final bool signedTotal;
+
+  /// When true, colors are picked using the **inverse** sign of the value
+  /// — i.e. a positive balance is rendered as a "negative" (red) and a
+  /// negative balance is rendered as "positive" (green).
+  ///
+  /// Required for ledgers where the raw arithmetic sign is the *opposite*
+  /// of what's good for the business owner. A supplier ledger is the
+  /// canonical example: `balance = credits − debits` is positive when we
+  /// owe the supplier (a liability — bad for us, should look red), and
+  /// negative when we have overpaid them (an asset — good for us, should
+  /// look green). Without this flag the colors would imply the
+  /// opposite of the business meaning.
+  final bool invertColorSign;
 
   final String debitHeader;
   final String creditHeader;
@@ -133,7 +147,8 @@ class LedgerView extends StatelessWidget {
                               right: true,
                               bold: true,
                               color: signedTotal
-                                  ? BalanceColors.signed(context, r.balance)
+                                  ? BalanceColors.signed(context,
+                                      invertColorSign ? -r.balance : r.balance)
                                   : null,
                             ),
                           ],
@@ -161,7 +176,8 @@ class LedgerView extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
                   color: signedTotal
-                      ? BalanceColors.signed(context, totalValue)
+                      ? BalanceColors.signed(context,
+                          invertColorSign ? -totalValue : totalValue)
                       : null,
                 ),
               ),

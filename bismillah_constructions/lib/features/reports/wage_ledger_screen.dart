@@ -315,10 +315,12 @@ class _WageLedgerScreenState extends ConsumerState<WageLedgerScreen> {
             rows: rows,
             totalLabel: 'Balance Owed to Worker',
             totalValue: balance,
-            // Sign matters here: positive = we owe the worker, zero = settled.
-            // Negative would only appear if the user over-paid, which the
-            // colorizer renders in red so it stands out.
+            // Sign matters here: positive = we owe the worker (liability,
+            // bad for us → red), zero = settled, negative = we over-paid
+            // (worker owes us, asset → green). `invertColorSign` flips
+            // the colour so a positive owed-to-worker balance shows red.
             signedTotal: true,
+            invertColorSign: true,
             debitHeader: 'Wages',
             creditHeader: 'Paid',
             balanceHeader: 'Owed',

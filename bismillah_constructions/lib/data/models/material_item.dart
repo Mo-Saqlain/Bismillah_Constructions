@@ -10,7 +10,9 @@ import '../../core/constants.dart';
 class MaterialItem {
   final String id;
   final String projectId;
-  final String supplierId;
+  /// Nullable as of schema v12: counter-purchase rows aren't attached to
+  /// a supplier (paid on the spot from cash / bank).
+  final String? supplierId;
   final String? transactionId;
   final String materialType;
   final MaterialUnit unit;
@@ -23,7 +25,7 @@ class MaterialItem {
   const MaterialItem({
     required this.id,
     required this.projectId,
-    required this.supplierId,
+    this.supplierId,
     this.transactionId,
     required this.materialType,
     required this.unit,
@@ -51,7 +53,7 @@ class MaterialItem {
   factory MaterialItem.fromMap(Map<String, Object?> m) => MaterialItem(
         id: m['id'] as String,
         projectId: m['project_id'] as String,
-        supplierId: m['supplier_id'] as String,
+        supplierId: m['supplier_id'] as String?,
         transactionId: m['transaction_id'] as String?,
         materialType: resolveMaterialLabel(m['material_type'] as String),
         unit: MaterialUnitX.fromDb(m['unit'] as String),

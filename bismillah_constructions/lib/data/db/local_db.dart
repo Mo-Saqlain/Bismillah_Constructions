@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 11);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 12);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 11,
+        version: 12,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -130,7 +130,9 @@ class LocalDb {
       CREATE TABLE material_inventory (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
-        supplier_id TEXT NOT NULL,
+        -- nullable as of v12: counter-purchase rows are not attached to
+        -- a supplier (cash buys from a hardware store, etc.).
+        supplier_id TEXT,
         transaction_id TEXT,
         material_type TEXT NOT NULL,
         unit TEXT NOT NULL,
@@ -462,6 +464,38 @@ class LocalDb {
           'CREATE INDEX idx_je_synced ON journal_entries(synced)');
       await db.execute(
           'CREATE INDEX idx_je_deleted ON journal_entries(is_deleted)');
+    }
+
+    if (oldVersion < 12) {
+      // v12: relax material_inventory.supplier_id to allow NULL so a
+      // counter-purchase material buy (Dr Material Costs / Cr Cash, no
+      // supplier on the credit side) can still record its quantity and
+      // unit rate against the project — enabling the price-trend report.
+      //
+      // SQLite can't DROP NOT NULL on a column in place; recreate the
+      // table and copy data over.
+      await db.execute('''
+        CREATE TABLE material_inventory_v12 (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          supplier_id TEXT,
+          transaction_id TEXT,
+          material_type TEXT NOT NULL,
+          unit TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          rate REAL NOT NULL,
+          total_cost REAL NOT NULL,
+          txn_type TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id),
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+      ''');
+      await db.execute(
+          'INSERT INTO material_inventory_v12 SELECT * FROM material_inventory');
+      await db.execute('DROP TABLE material_inventory');
+      await db.execute(
+          'ALTER TABLE material_inventory_v12 RENAME TO material_inventory');
     }
 
     if (oldVersion < 3) {

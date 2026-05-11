@@ -13,7 +13,12 @@ import '../../core/export/csv_export.dart';
 /// bottom-line numbers an owner cares about: revenue received, money
 /// spent, and the resulting net position.
 ///
-/// For With-Material projects, "Net" is `received − spent` (savings).
+/// For With-Material projects, "Net" is `budget − spent` — the projected
+/// profit at close, which doubles as a "headroom" metric while the
+/// project is in-progress (how much you can still spend before the job
+/// becomes unprofitable). Avoids the fake-profit trap that
+/// `received − spent` would produce when a customer prepays.
+///
 /// For Labour-Rate projects, "Net" is the booked Service Fee Income for
 /// that project (the contractor's earnings; the rest is pass-through).
 ///
@@ -143,10 +148,12 @@ class _ProjectProfitabilityScreenState
                 const SizedBox(height: 8),
               ],
               Text(
-                'Net = received − spent for With-Material projects, '
-                'and the booked service-fee income for Labour-Rate projects '
-                '(the contractor\'s earnings — the rest is customer money '
-                'passing through).',
+                'Net = budget − spent for With-Material projects (the '
+                'projected profit at close — your headroom while in-progress, '
+                'realized profit once archived; goes red when costs overrun '
+                'budget). For Labour-Rate projects, Net is the booked '
+                'service-fee income (the contractor\'s earnings — the rest '
+                'is customer money passing through).',
                 style: Theme.of(context).textTheme.bodySmall,
                 textAlign: TextAlign.center,
               ),
@@ -280,7 +287,8 @@ class _ProfitabilityChart extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Each bar = one project. Green above zero = profit, red below = loss.',
+          'Each bar = one project\'s projected profit (budget − spent for WM, '
+          'service fee for LR). Green = on track, red = costs already over budget.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 10),
@@ -448,11 +456,28 @@ final _profitabilityProvider =
         projectId: p.id);
 
     // Net for the contractor:
-    //   * With-Material: cash kept after spending = received − spent.
-    //   * Labour-Rate: pass-through, profit = booked service fee.
-    final net = p.model == ProjectModel.labourRate
-        ? feeIncome
-        : revenue - spent;
+    //   * With-Material: `budget − spent` — the projected profit at
+    //     close, assuming no more spending. While the project is
+    //     in-progress this reads as "headroom" (how much room you have
+    //     before this becomes unprofitable). Once archived, costs are
+    //     final and the formula gives the realized profit. We deliberately
+    //     do NOT use `received − spent` because that's the same fake-
+    //     profit pattern PoC fixes in the Income Statement — it would
+    //     flash a big positive number the moment a customer prepays,
+    //     before any work is done.
+    //   * Labour-Rate: profit = booked service fee (pass-through model).
+    //   * No-budget legacy fallback: if budget is null (only possible on
+    //     pre-existing projects since budgets are now required on WM),
+    //     fall back to received − spent so the row still shows
+    //     *something* meaningful.
+    final double net;
+    if (p.model == ProjectModel.labourRate) {
+      net = feeIncome;
+    } else if (p.budget != null && p.budget! > 0) {
+      net = p.budget! - spent;
+    } else {
+      net = revenue - spent;
+    }
 
     rows.add(_ProfitabilityRow(
       id: p.id,

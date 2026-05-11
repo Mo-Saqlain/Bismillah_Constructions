@@ -139,6 +139,29 @@ class LedgerRepository {
     );
   }
 
+  /// Counter purchase: pay for material on the spot, no supplier credit.
+  /// Dr Material Costs / Cr Cash|Bank, tagged to a project but with no
+  /// supplier_id. The corresponding `material_inventory` row carries the
+  /// quantity / unit / rate the user enters, which feeds the price-trend
+  /// report — so even for counter buys we don't lose the unit-price data.
+  Future<String> postMaterialCounter({
+    required double amount,
+    required String projectId,
+    required Account paidFrom,
+    String? description,
+  }) async {
+    _assertNonEmpty(projectId, 'projectId');
+    await _assertCashLike(paidFrom);
+    return _post(
+      debitAccount: Accounts.materialCosts,
+      creditAccount: paidFrom,
+      amount: amount,
+      projectId: projectId,
+      // supplier_id intentionally null — counter buys are anonymous.
+      description: description,
+    );
+  }
+
   /// Pay a labour worker. If the worker already has wages on credit
   /// (recorded earlier via [postLabourCredit]), this payment **settles the
   /// outstanding payable first** rather than booking a brand-new cost. Only

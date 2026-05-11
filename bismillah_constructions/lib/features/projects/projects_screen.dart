@@ -261,8 +261,20 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                 const SizedBox(height: 12),
                 TextField(
                   controller: budgetCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Budget (optional)', prefixText: 'Rs '),
+                  decoration: InputDecoration(
+                    // With-Material projects rely on budget for PoC revenue
+                    // recognition, loss provision, the at-risk threshold,
+                    // BvA reports and the archive gate — so it's required.
+                    // Labour-Rate doesn't need it (the customer's deposits
+                    // fund the spend, no contract cap).
+                    labelText: model == ProjectModel.withMaterial
+                        ? 'Contract value (budget) *'
+                        : 'Budget (optional)',
+                    prefixText: 'Rs ',
+                    helperText: model == ProjectModel.withMaterial
+                        ? 'Required: what the customer has agreed to pay'
+                        : 'Optional planning ceiling',
+                  ),
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [
@@ -298,6 +310,18 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                   onPressed: () async {
                     final name = nameCtrl.text.trim();
                     if (name.isEmpty) return;
+                    final budget = double.tryParse(budgetCtrl.text);
+                    // Hard validation: With-Material projects can't function
+                    // accounting-wise without a contract value.
+                    if (model == ProjectModel.withMaterial &&
+                        (budget == null || budget <= 0)) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                        content: Text(
+                            'With-Material projects need a contract value '
+                            '(budget) greater than zero.'),
+                      ));
+                      return;
+                    }
                     final repo =
                         await ref.read(entityRepoProvider.future);
                     await repo.createProject(
@@ -309,7 +333,7 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                       siteAddress: siteCtrl.text.trim().isEmpty
                           ? null
                           : siteCtrl.text.trim(),
-                      budget: double.tryParse(budgetCtrl.text),
+                      budget: budget,
                       projectManager: managerCtrl.text.trim().isEmpty
                           ? null
                           : managerCtrl.text.trim(),
@@ -393,8 +417,15 @@ void _showProjectEditForm(
             const SizedBox(height: 12),
             TextField(
               controller: budgetCtrl,
-              decoration: const InputDecoration(
-                  labelText: 'Budget (optional)', prefixText: 'Rs '),
+              decoration: InputDecoration(
+                labelText: existing.model == ProjectModel.withMaterial
+                    ? 'Contract value (budget) *'
+                    : 'Budget (optional)',
+                prefixText: 'Rs ',
+                helperText: existing.model == ProjectModel.withMaterial
+                    ? 'Required: what the customer has agreed to pay'
+                    : 'Optional planning ceiling',
+              ),
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
@@ -428,13 +459,23 @@ void _showProjectEditForm(
               onPressed: () async {
                 final name = nameCtrl.text.trim();
                 if (name.isEmpty) return;
+                final budget = double.tryParse(budgetCtrl.text);
+                if (existing.model == ProjectModel.withMaterial &&
+                    (budget == null || budget <= 0)) {
+                  ScaffoldMessenger.of(sheetCtx).showSnackBar(const SnackBar(
+                    content: Text(
+                        'With-Material projects need a contract value '
+                        '(budget) greater than zero.'),
+                  ));
+                  return;
+                }
                 final repo = await ref.read(entityRepoProvider.future);
                 await repo.updateProjectFields(
                   existing.id,
                   name: name,
                   clientName: clientCtrl.text,
                   siteAddress: siteCtrl.text,
-                  budget: double.tryParse(budgetCtrl.text),
+                  budget: budget,
                   projectManager: managerCtrl.text,
                   serviceFeePercent: existing.model == ProjectModel.labourRate
                       ? double.tryParse(serviceFeeCtrl.text)

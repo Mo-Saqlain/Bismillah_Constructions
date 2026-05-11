@@ -6,6 +6,7 @@ import 'balance_sheet_screen.dart';
 import 'bank_ledger_screen.dart';
 import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
+import 'material_price_trend_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
 import 'project_profitability_screen.dart';
@@ -162,6 +163,17 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const ProjectProfitabilityScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.show_chart,
+            color: Colors.indigo,
+            title: 'Material Price Trend',
+            subtitle:
+                'Per-material unit-price history — spot rising prices early and quote new jobs better',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const MaterialPriceTrendScreen())),
           ),
         ],
       ),
