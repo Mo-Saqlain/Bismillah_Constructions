@@ -117,6 +117,18 @@ class _ProjectReconciliationScreenState
       if (!mounted) return;
       setState(() => _busy = false);
       await _handleBudgetMismatch(e);
+    } on LabourRateUnsettledException catch (e) {
+      if (mounted) {
+        final msg = e.netToSettle > 0
+            ? 'Archive blocked — refund the customer '
+                '${fmtMoney(e.refundToCustomer)} of surplus deposit first.'
+            : 'Archive blocked — collect '
+                '${fmtMoney(e.customerOwesUs)} still owed by the customer first.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(msg),
+          duration: const Duration(seconds: 6),
+        ));
+      }
     } on ReconciliationException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -220,9 +232,18 @@ class _ProjectReconciliationScreenState
     final gate = _gate!;
     final isLabour = p.model == ProjectModel.labourRate;
 
-    final ledgerOk = gate.ledgerNet.abs() < 0.01;
     final payablesOk = gate.supplierPayables.abs() < 0.01;
-    final canArchive = ledgerOk && payablesOk;
+    final ledgerOk = gate.ledgerNet.abs() < 0.01;
+    // Backend gate is asymmetric by model:
+    //   * With-Material: requires only `supplierPayables == 0`. Revenue
+    //     legitimately exceeds costs by the project's profit margin, so
+    //     forcing `ledgerNet == 0` would block legitimate archives. The
+    //     budget-vs-received case is handled by a separate dialog.
+    //   * Labour-Rate: requires BOTH `supplierPayables == 0` AND
+    //     `ledgerNet == 0`. LR is a pass-through; customer money is a
+    //     deposit, not income. Any surplus has to be refunded and any
+    //     deficit collected before close.
+    final canArchive = payablesOk && (!isLabour || ledgerOk);
 
     final feeAlreadyPosted = (_close?.serviceFee ?? 0) > 0 &&
         gate.serviceFeeBooked >= (_close!.serviceFee - 0.01);
@@ -236,6 +257,7 @@ class _ProjectReconciliationScreenState
             ok: canArchive,
             ledgerNet: gate.ledgerNet,
             payables: gate.supplierPayables,
+            isLabour: isLabour,
           ),
           const SizedBox(height: 8),
           _SectionTitle(title: 'Project Cashflows'),
@@ -246,10 +268,14 @@ class _ProjectReconciliationScreenState
               value: gate.supplierPayables,
               colorize: !payablesOk),
           _Row(label: 'Service Fee Booked', value: gate.serviceFeeBooked),
+          // For LR this is a hard gate (must net to zero before archive);
+          // for WM it's informational — the gap is the project's profit.
           _Row(
-              label: 'Project Ledger Net',
+              label: isLabour
+                  ? 'Project Ledger Net'
+                  : 'Project Ledger Net (informational)',
               value: gate.ledgerNet,
-              colorize: !ledgerOk),
+              colorize: isLabour && !ledgerOk),
           const SizedBox(height: 12),
           _SectionTitle(title: 'Profit (${p.model.label})'),
           _Row(label: 'Total Project Outflow', value: outflow),
@@ -263,13 +289,18 @@ class _ProjectReconciliationScreenState
             )
           else
             _Row(
-                label: 'Business Savings (Customer Inflow − Outflow)',
+                label: 'Realized Profit (Received − Outflow)',
                 value: rec.projectInflow - outflow,
                 colorize: true),
           if (!isLabour) ...[
             const SizedBox(height: 4),
             Text(
-              'With-Material model: archive only allowed once every cost is matched by an inflow and the supplier payable is zero.',
+              'With-Material: profit is the gap between what the customer '
+              'paid and what was spent. Archive is gated only on supplier '
+              'payables being zero — and, if the customer has paid less '
+              'than the budget, the archive flow will prompt you to either '
+              'resize the budget to the received amount or record the '
+              'remaining payment first.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -312,8 +343,12 @@ class _ProjectReconciliationScreenState
           Text(
             canArchive
                 ? 'Books are settled — safe to archive. Data is preserved for legal evidence.'
-                : 'Archive blocked. Settle the items shown in red above. '
-                    'A project is closeable only when its ledger nets to zero AND no supplier payables for it remain open.',
+                : isLabour
+                    ? 'Archive blocked. Pay every supplier and either refund '
+                        'the surplus customer deposit or collect what is '
+                        'still owed so the project ledger nets to zero.'
+                    : 'Archive blocked. Settle every supplier payable for '
+                        'this project, then try again.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: canArchive ? null : BalanceColors.negative(context),
                 ),
@@ -333,10 +368,16 @@ class _StatusBanner extends StatelessWidget {
     required this.ok,
     required this.ledgerNet,
     required this.payables,
+    required this.isLabour,
   });
   final bool ok;
   final double ledgerNet;
   final double payables;
+
+  /// For Labour-Rate projects the `ledgerNet == 0` requirement is a hard
+  /// gate; for With-Material it's informational only. Drives the fail
+  /// message wording.
+  final bool isLabour;
 
   @override
   Widget build(BuildContext context) {
@@ -368,13 +409,23 @@ class _StatusBanner extends StatelessWidget {
   }
 
   String _failMessage() {
-    final pieces = <String>[
-      if (ledgerNet.abs() >= 0.01)
-        'ledger net ${fmtSignedMoney(ledgerNet)}',
-      if (payables.abs() >= 0.01)
-        'supplier payables ${fmtSignedMoney(payables)}',
-    ];
-    return 'Archive blocked: ${pieces.join(' and ')}. Settle these first.';
+    final pieces = <String>[];
+    if (payables.abs() >= 0.01) {
+      pieces.add('supplier payables ${fmtSignedMoney(payables)} still open');
+    }
+    // ledgerNet only gates LR. Sign convention: positive = costs exceed
+    // revenue (customer underpaid), negative = revenue exceeds costs
+    // (surplus to refund). The LR business meaning is what matters.
+    if (isLabour && ledgerNet.abs() >= 0.01) {
+      if (ledgerNet < 0) {
+        pieces.add(
+            'refund ${fmtMoney(-ledgerNet)} surplus customer deposit');
+      } else {
+        pieces.add('collect ${fmtMoney(ledgerNet)} still owed by customer');
+      }
+    }
+    if (pieces.isEmpty) return 'Archive blocked.';
+    return 'Archive blocked: ${pieces.join(' and ')}.';
   }
 }
 

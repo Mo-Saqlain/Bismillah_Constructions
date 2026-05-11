@@ -182,7 +182,11 @@ void main() {
     expect(after!.archived, true);
   });
 
-  test('Labour-Rate Bypass: project archives even with open ledger', () async {
+  test('Labour-Rate Gate: open ledger blocks archive (pass-through model)',
+      () async {
+    // LR is pass-through — customer money is a deposit, not income.
+    // Posting just a labour cost without revenue leaves the ledger
+    // unbalanced (cost > revenue) so archive must be blocked.
     final sId = await _supplier('Workforce');
     final pId = await _project('Labour Site',
         model: ProjectModel.labourRate,
@@ -194,6 +198,37 @@ void main() {
         projectId: pId,
         supplierId: sId,
         paidFrom: Accounts.cash);
+
+    expect(
+      () => _entityRepo.archiveProject(pId),
+      throwsA(isA<LabourRateUnsettledException>()),
+    );
+    final after = await _entityRepo.project(pId);
+    expect(after!.archived, false,
+        reason: 'LR archive blocked while customer money is unsettled');
+  });
+
+  test('Labour-Rate Gate: balanced ledger allows archive', () async {
+    // Customer prepays exactly what's needed, fee is reclassified, no
+    // residual to settle → archive succeeds.
+    final sId = await _supplier('Workforce');
+    final pId = await _project('Labour Site',
+        model: ProjectModel.labourRate,
+        clientName: 'Acme',
+        serviceFeePercent: 10);
+
+    // Customer prepays 1100 (1000 cost + 100 fee).
+    await _ledgerRepo.postReceiveFromProject(
+        amount: 1100, projectId: pId, receivedInto: Accounts.cash);
+    await _ledgerRepo.postLabourPayment(
+        amount: 1000,
+        projectId: pId,
+        supplierId: sId,
+        paidFrom: Accounts.cash);
+    // Service-fee reclassification: Dr Project Revenue 100 / Cr Service
+    // Fee Income 100. Project ledger now nets to zero.
+    await _ledgerRepo.postProjectServiceFee(
+        projectId: pId, amount: 100);
 
     await _entityRepo.archiveProject(pId);
     final after = await _entityRepo.project(pId);

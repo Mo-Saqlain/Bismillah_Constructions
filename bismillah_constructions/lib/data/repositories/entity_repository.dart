@@ -184,6 +184,29 @@ class EntityRepository {
           received: balance.received,
         );
       }
+
+      // Labour-Rate gate: customer money is a deposit, NOT contractor
+      // income. After the service-fee reclassification, the project
+      // ledger must net to zero — surplus has to be refunded to the
+      // customer, deficit collected from them. Otherwise archiving
+      // leaves unresolved customer money in the books.
+      //
+      // This is a deliberate re-introduction of the old "ledgerNet == 0"
+      // requirement, but scoped only to LR. WM doesn't need it (revenue
+      // legitimately exceeds costs in a fixed-price contract — that's
+      // the profit).
+      if (p.model == ProjectModel.labourRate &&
+          balance.ledgerNet.abs() >= 0.01) {
+        throw LabourRateUnsettledException(
+          projectId: id,
+          // `netLedger = costs − revenue`. A negative value means revenue
+          // exceeds costs (surplus to refund); positive means costs
+          // exceed revenue (customer underpaid, owes us). Express as
+          // `netToSettle = −netLedger` so positive = refund the customer
+          // (matches the LabourRateClose sign convention).
+          netToSettle: -balance.ledgerNet,
+        );
+      }
     }
 
     final now = DateTime.now().toUtc();
@@ -239,11 +262,20 @@ class EntityRepository {
     final labourDr = await sum('debit', Accounts.labourCosts.id);
     final revenueCr = await sum('credit', Accounts.projectRevenue.id);
     final feeCr = await sum('credit', Accounts.serviceFeeIncome.id);
-    // Same convention as the project ledger view: debits push the running
-    // total positive (cost incurred), credits pull it negative (income
-    // booked). Zero means everything spent has been paid for.
+    // For a balanced Labour-Rate project, customer money in must equal
+    // customer money out:
+    //     PROJECT_REV credits == costs incurred + fee charged
+    //     revenueCr == (materialDr + labourDr) + feeCr
+    // Rearranged into "net" form:
+    //     (materialDr + labourDr + feeCr) − revenueCr == 0
+    //
+    // The previous formula was `(matDr + labDr) − (revCr + feeCr)` —
+    // that double-counted the fee, because `postProjectServiceFee` is a
+    // reclassification (Dr PROJECT_REV / Cr SERVICE_FEE_INCOME): the fee
+    // is already taken out of revenue, so adding it back to the income
+    // side made balanced LR projects look 2×feeCr off.
     final ledgerNet =
-        (materialDr + labourDr) - (revenueCr + feeCr);
+        (materialDr + labourDr + feeCr) - revenueCr;
 
     return _ProjectLedgerBalance(
       supplierPayables: supplierPayables,
@@ -934,6 +966,29 @@ class ReconciliationException implements Exception {
   @override
   String toString() => 'ReconciliationException(project=$projectId, '
       'outstandingPayables=$outstandingPayables, netLedger=$netLedger)';
+}
+
+/// Thrown when a Labour-Rate project is being archived but the project
+/// ledger has not been balanced to zero — i.e. customer money is still
+/// unsettled. For an LR project the contractor only earns the service
+/// fee; everything else is pass-through, so any surplus must be refunded
+/// and any deficit collected before close.
+///
+/// `netToSettle` follows the same sign convention as [LabourRateClose]:
+///   * Positive → contractor is holding the customer's surplus → refund.
+///   * Negative → customer underpaid → collect the deficit.
+class LabourRateUnsettledException implements Exception {
+  final String projectId;
+  final double netToSettle;
+  const LabourRateUnsettledException({
+    required this.projectId,
+    required this.netToSettle,
+  });
+  double get refundToCustomer => netToSettle > 0 ? netToSettle : 0;
+  double get customerOwesUs => netToSettle < 0 ? -netToSettle : 0;
+  @override
+  String toString() => 'LabourRateUnsettledException(project=$projectId, '
+      'netToSettle=$netToSettle)';
 }
 
 /// Thrown when a With-Material project is being archived but the customer

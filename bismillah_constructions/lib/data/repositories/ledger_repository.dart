@@ -1268,6 +1268,13 @@ class LedgerRepository {
     );
 
     final byProject = <String, List<_OpenInvoice>>{};
+    // Customer prepayment per project. When revenue arrives before any
+    // cost is incurred (advance payment), the excess used to be silently
+    // dropped — then a later cost would be treated as "we are owed", even
+    // though the customer's prepayment had already covered it. We now
+    // bank the surplus here and consume it from later costs before they
+    // hit the queue.
+    final prepaid = <String, double>{};
     for (final r in rows) {
       final projectId = r['project_id'] as String;
       final accountId = r['account_id'] as String;
@@ -1278,9 +1285,21 @@ class LedgerRepository {
       final queue = byProject.putIfAbsent(projectId, () => []);
       if (accountId == Accounts.materialCosts.id ||
           accountId == Accounts.labourCosts.id) {
-        // Cost incurred → customer owes us this much.
         if (debit > 0) {
-          queue.add(_OpenInvoice(date: created, remaining: debit));
+          var remaining = debit;
+          // First, absorb any unmatched customer prepayment for this
+          // project — that money already covered work like this.
+          final bank = prepaid[projectId] ?? 0;
+          if (bank > 0) {
+            final used = remaining <= bank ? remaining : bank;
+            remaining -= used;
+            prepaid[projectId] = bank - used;
+          }
+          // Whatever's left is genuinely unfunded work → customer owes
+          // us this much.
+          if (remaining > 0) {
+            queue.add(_OpenInvoice(date: created, remaining: remaining));
+          }
         }
       } else if (accountId == Accounts.projectRevenue.id) {
         // Customer paid → consume open balance FIFO.
@@ -1294,6 +1313,12 @@ class LedgerRepository {
             head.remaining -= pay;
             pay = 0;
           }
+        }
+        // Anything left over is a customer prepayment — banked so the
+        // next cost incurred consumes it before it gets queued as
+        // "owed".
+        if (pay > 0) {
+          prepaid[projectId] = (prepaid[projectId] ?? 0) + pay;
         }
       }
     }
@@ -1346,14 +1371,31 @@ class LedgerRepository {
     );
 
     final bySupplier = <String, List<_OpenInvoice>>{};
+    // Unmatched bills per supplier — when a credit (supplier billed us)
+    // arrives before any debit (we paid them), the credit used to be
+    // silently dropped, and a later payment would then show up as a
+    // false overpayment. We now bank the unmatched bill here so a later
+    // payment consumes it before being queued as "they hold our money".
+    final unmatchedBill = <String, double>{};
     for (final row in rows) {
       final je = JournalEntry.fromMap(row);
       final supplierId = je.supplierId;
       if (supplierId == null) continue;
       final queue = bySupplier.putIfAbsent(supplierId, () => []);
       if (je.debit > 0) {
-        // Payment to supplier — they hold our money.
-        queue.add(_OpenInvoice(date: je.createdAt, remaining: je.debit));
+        var remaining = je.debit;
+        // First, settle any unmatched bill that arrived earlier — this
+        // payment is what cancels it out.
+        final bill = unmatchedBill[supplierId] ?? 0;
+        if (bill > 0) {
+          final used = remaining <= bill ? remaining : bill;
+          remaining -= used;
+          unmatchedBill[supplierId] = bill - used;
+        }
+        // Anything left really is money the supplier holds.
+        if (remaining > 0) {
+          queue.add(_OpenInvoice(date: je.createdAt, remaining: remaining));
+        }
       } else if (je.credit > 0) {
         var pay = je.credit;
         while (pay > 0 && queue.isNotEmpty) {
@@ -1365,6 +1407,11 @@ class LedgerRepository {
             head.remaining -= pay;
             pay = 0;
           }
+        }
+        // Bill exceeds prior payments → bank as unmatched so the next
+        // payment cancels it instead of being mis-counted as overpayment.
+        if (pay > 0) {
+          unmatchedBill[supplierId] = (unmatchedBill[supplierId] ?? 0) + pay;
         }
       }
     }

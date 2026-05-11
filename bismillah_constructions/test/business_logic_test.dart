@@ -640,5 +640,96 @@ void main() {
       expect(p!.archived, true);
       expect(p.budget, 1000000);
     });
+
+    test(
+        'User scenario: 3M received → 72K cost → supplier paid → NOT in '
+        'receivables (FIFO prepayment carry-forward)', () async {
+      // Reproduces the exact bug the user reported on 2026-05-08:
+      // After receiving 3M and spending 72K (supplier paid in full), the
+      // dashboard showed 72K in receivables. The FIFO matcher had
+      // discarded the customer's prepayment, then queued the later cost
+      // as "owed by customer".
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 15000000);
+
+      // Customer prepays before any work.
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 3000000, projectId: pId, receivedInto: Accounts.cash);
+      // Then a single material buy + settlement.
+      await _ledgerRepo.postMaterialBuy(
+          amount: 72000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postSupplierPay(
+          amount: 72000,
+          supplierId: sId,
+          paidFrom: Accounts.cash,
+          projectId: pId);
+
+      final r = await _ledgerRepo.receivablesTotals();
+      expect(r.projectsOwed, 0,
+          reason:
+              'customer prepaid 3M — the 72K cost is fully covered, '
+              'nothing should be flagged as owed');
+      expect(r.suppliersOverpaid, 0,
+          reason: 'supplier paid in full, no overpayment');
+    });
+
+    test(
+        'Customer overpays then incurs costs: queue stays empty, '
+        'prepayment bank tracks the overhang', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 15000000);
+
+      await _ledgerRepo.postReceiveFromProject(
+          amount: 1000000, projectId: pId, receivedInto: Accounts.cash);
+      // Multiple cost events, each smaller than the prepayment.
+      await _ledgerRepo.postMaterialBuy(
+          amount: 100000, projectId: pId, supplierId: sId);
+      await _ledgerRepo.postMaterialBuy(
+          amount: 200000, projectId: pId, supplierId: sId);
+
+      final r = await _ledgerRepo.receivablesTotals();
+      expect(r.projectsOwed, 0,
+          reason: 'prepayment of 1M still covers the 300K of costs');
+    });
+
+    test(
+        'Mixed order: cost → prepayment → cost — prepayment consumes '
+        'only what fits', () async {
+      final sId = await _supplier('Steelco');
+      final pId = await _project('Site A', budget: 1000000);
+
+      // Backdate three events so order matters.
+      final now = DateTime.now().toUtc();
+      Future<void> entry(
+          double debit, double credit, String accountId, int daysAgo) async {
+        final ts = now.subtract(Duration(days: daysAgo));
+        final txnId = 'mx-$daysAgo';
+        await _db.insert('journal_entries', {
+          'id': '$txnId-a',
+          'transaction_id': txnId,
+          'account_id': accountId,
+          'project_id': pId,
+          'supplier_id': sId,
+          'debit': debit,
+          'credit': credit,
+          'created_at': ts.toIso8601String(),
+          'is_deleted': 0,
+          'synced': 0,
+        });
+      }
+
+      // T-10: cost 200K (queue=[200K], prepaid=0)
+      await entry(200000, 0, Accounts.materialCosts.id, 10);
+      // T-5: revenue 100K (queue=[100K] after consume, prepaid=0)
+      await entry(0, 100000, Accounts.projectRevenue.id, 5);
+      // T-1: cost 150K (queue=[100K, 150K], still nothing prepaid)
+      await entry(150000, 0, Accounts.materialCosts.id, 1);
+
+      final r = await _ledgerRepo.receivablesTotals();
+      expect(r.projectsOwed, 250000,
+          reason:
+              '200K + 150K of costs − 100K customer payment = 250K still '
+              'owed by customer');
+    });
   });
 }
