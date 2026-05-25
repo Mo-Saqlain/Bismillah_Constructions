@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 14);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 15);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 14,
+        version: 15,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -83,7 +83,8 @@ class LocalDb {
         bank_details TEXT,
         is_archived INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -94,7 +95,8 @@ class LocalDb {
         account_no TEXT,
         is_archived INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -104,7 +106,8 @@ class LocalDb {
         name TEXT NOT NULL,
         type TEXT NOT NULL,
         amount REAL NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -126,7 +129,8 @@ class LocalDb {
         completion_percent INTEGER NOT NULL DEFAULT 0,
         is_archived INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -150,6 +154,7 @@ class LocalDb {
         -- when the user soft-deletes a material buy.
         is_deleted INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (project_id) REFERENCES projects(id),
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
       )
@@ -169,7 +174,8 @@ class LocalDb {
         created_at TEXT NOT NULL,
         synced INTEGER NOT NULL DEFAULT 0,
         is_deleted INTEGER NOT NULL DEFAULT 0,
-        deleted_at TEXT
+        deleted_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -214,7 +220,8 @@ class LocalDb {
         waste_f REAL,
         lead_d INTEGER,
         dims TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
     // No seeds. Fresh installs start with an empty material catalog so the
@@ -249,7 +256,8 @@ class LocalDb {
         name TEXT NOT NULL UNIQUE,
         description TEXT,
         default_daily_rate REAL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -271,7 +279,7 @@ class LocalDb {
         is_deleted INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
     await db.execute(
@@ -293,7 +301,8 @@ class LocalDb {
         is_deleted INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT,
         created_at TEXT NOT NULL,
-        resolved_at TEXT
+        resolved_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
     await db.execute(
@@ -302,6 +311,34 @@ class LocalDb {
         'CREATE INDEX idx_followups_project ON follow_ups(project_id)');
     await db.execute(
         'CREATE INDEX idx_followups_supplier ON follow_ups(supplier_id)');
+
+    // v15: bump-on-update triggers powering the cloud-sync cursor. Mirror
+    // of the migration in `_onUpgrade(< 15)` — they have to exist on
+    // fresh installs too, not just upgrades.
+    const syncTables = <String>[
+      'projects',
+      'suppliers',
+      'banks',
+      'journal_entries',
+      'material_inventory',
+      'material_types',
+      'labour_types',
+      'counter_entities',
+      'notes',
+      'follow_ups',
+    ];
+    for (final t in syncTables) {
+      await db.execute('''
+        CREATE TRIGGER trg_bump_${t}_updated
+        AFTER UPDATE ON $t
+        FOR EACH ROW
+        WHEN NEW.updated_at = OLD.updated_at
+        BEGIN
+          UPDATE $t SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE rowid = NEW.rowid;
+        END
+      ''');
+    }
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -629,6 +666,68 @@ class LocalDb {
           'CREATE INDEX IF NOT EXISTS idx_followups_project ON follow_ups(project_id)');
       await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_followups_supplier ON follow_ups(supplier_id)');
+    }
+
+    if (oldVersion < 15) {
+      // v15: cloud-sync support.
+      //
+      // Every table that mirrors to Supabase needs an `updated_at` column
+      // so the sync service can ask "what's changed since last push?". On
+      // the pull side, rows incoming from Supabase whose id already exists
+      // locally are skipped — the local DB always wins on its own rows.
+      //
+      // We add the column nullable (so existing rows survive the ALTER),
+      // then backfill with the row's `created_at`. The CURRENT_TIMESTAMP
+      // default kicks in for future inserts that don't pass the column
+      // explicitly. UPDATE triggers bump `updated_at` to "now" on every
+      // row change.
+      //
+      // `notes.updated_at` already existed (v14) but was nullable; we
+      // backfill any nulls so the cursored push doesn't trip over them.
+      const syncTables = <String>[
+        'projects',
+        'suppliers',
+        'banks',
+        'journal_entries',
+        'material_inventory',
+        'material_types',
+        'labour_types',
+        'counter_entities',
+        'follow_ups',
+      ];
+      for (final t in syncTables) {
+        try {
+          await db.execute(
+              'ALTER TABLE $t ADD COLUMN updated_at TEXT');
+        } catch (_) {/* column may already exist on partial upgrades */}
+        await db.execute(
+            'UPDATE $t SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL');
+      }
+      // notes.updated_at already exists since v14 but as nullable —
+      // backfill its nulls too.
+      await db.execute(
+          "UPDATE notes SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
+
+      // Bump-on-update triggers. Skip the trigger on `journal_entries`
+      // for soft-delete because the delete flow already touches the row
+      // — the trigger would still fire and that's the behaviour we want
+      // (soft-delete must propagate to the cloud).
+      const triggerTables = <String>[
+        ...syncTables,
+        'notes',
+      ];
+      for (final t in triggerTables) {
+        await db.execute('''
+          CREATE TRIGGER IF NOT EXISTS trg_bump_${t}_updated
+          AFTER UPDATE ON $t
+          FOR EACH ROW
+          WHEN NEW.updated_at = OLD.updated_at
+          BEGIN
+            UPDATE $t SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE rowid = NEW.rowid;
+          END
+        ''');
+      }
     }
 
     if (oldVersion < 3) {

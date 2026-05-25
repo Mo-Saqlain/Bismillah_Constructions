@@ -1148,6 +1148,62 @@ class EntityRepository {
     );
   }
 
+  // ---- Cloud sync state (v15) ----
+
+  /// Returns the tenant UUID for this operator's data scope on
+  /// Supabase. Lazily generated on first call and persisted to
+  /// `app_settings` — every subsequent call returns the same value.
+  ///
+  /// To migrate a second device onto an existing tenant: copy the value
+  /// from the first device (Settings → Cloud Sync → Tenant ID → Copy)
+  /// and call [setTenantId] on the second device **before** any cloud
+  /// sync runs, so push doesn't tag rows with the fresh UUID.
+  Future<String> ensureTenantId() async {
+    final existing = await getSetting(SettingsKeys.tenantId);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final fresh = _uuid.v4();
+    await setSetting(SettingsKeys.tenantId, fresh);
+    return fresh;
+  }
+
+  Future<String?> tenantIdOrNull() => getSetting(SettingsKeys.tenantId);
+
+  Future<void> setTenantId(String tenantId) =>
+      setSetting(SettingsKeys.tenantId, tenantId);
+
+  /// `true` when the operator has opted into cloud sync. Defaults to
+  /// `true` so the first launch on a configured build enables sync
+  /// automatically (matching the original auto-start behaviour). Toggle
+  /// from Settings.
+  Future<bool> cloudSyncEnabled() async {
+    final v = await getSetting(SettingsKeys.cloudSyncEnabled);
+    if (v == null) return true;
+    return v == '1' || v.toLowerCase() == 'true';
+  }
+
+  Future<void> setCloudSyncEnabled(bool enabled) =>
+      setSetting(SettingsKeys.cloudSyncEnabled, enabled ? '1' : '0');
+
+  /// Last point at which a successful push for [table] completed. The
+  /// next push only sends rows whose `updated_at` is strictly greater.
+  Future<DateTime?> pushCursor(String table) async {
+    final v = await getSetting(SettingsKeys.pushCursor(table));
+    if (v == null || v.isEmpty) return null;
+    return DateTime.tryParse(v);
+  }
+
+  Future<void> setPushCursor(String table, DateTime at) =>
+      setSetting(SettingsKeys.pushCursor(table), at.toUtc().toIso8601String());
+
+  Future<DateTime?> pullCursor(String table) async {
+    final v = await getSetting(SettingsKeys.pullCursor(table));
+    if (v == null || v.isEmpty) return null;
+    return DateTime.tryParse(v);
+  }
+
+  Future<void> setPullCursor(String table, DateTime at) =>
+      setSetting(SettingsKeys.pullCursor(table), at.toUtc().toIso8601String());
+
   // ---- Settings ----
 
   Future<String?> getSetting(String key) async {

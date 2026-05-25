@@ -229,6 +229,26 @@ class SettingsKeys {
   static const themeMode = 'theme_mode'; // 'light' | 'dark' | 'system'
   static const lastBackupAt = 'last_backup_at';
   static const deviceId = 'device_id';
+
+  // v15: cloud-sync state.
+  /// UUID identifying this operator's data scope on Supabase. Generated
+  /// once on first sync; copy it from one device to a second so they
+  /// share the same dataset.
+  static const tenantId = 'tenant_id';
+
+  /// '1' / '0' — user opt-in to cloud sync. Defaults to '1' when
+  /// SupabaseConfig is configured (matches the existing auto-start
+  /// behaviour); user can disable from Settings → Cloud Sync.
+  static const cloudSyncEnabled = 'cloud_sync_enabled';
+
+  /// ISO-8601 cursor for the **pull** stream — server rows with
+  /// `updated_at > this` are candidates for a pull. Keyed per table
+  /// (e.g. `cloud_pull_at:journal_entries`).
+  static String pullCursor(String table) => 'cloud_pull_at:$table';
+
+  /// ISO-8601 cursor for the **push** stream — local rows with
+  /// `updated_at > this` are candidates for a push.
+  static String pushCursor(String table) => 'cloud_push_at:$table';
 }
 
 class SupabaseConfig {

@@ -8,7 +8,8 @@ import 'db_providers.dart';
 
 final syncServiceFutureProvider = FutureProvider<SyncService>((ref) async {
   final ledger = await ref.watch(ledgerRepoProvider.future);
-  final svc = SyncService(ledger);
+  final entities = await ref.watch(entityRepoProvider.future);
+  final svc = SyncService(ledger, entities);
   ref.onDispose(svc.dispose);
   svc.start();
   return svc;

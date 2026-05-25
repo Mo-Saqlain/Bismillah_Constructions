@@ -25,6 +25,12 @@ class LedgerRepository {
   LedgerRepository(this._db);
   final Database _db;
 
+  /// Read-only escape hatch for callers (like [SyncService]) that need
+  /// to issue raw queries against the same underlying database. Keep
+  /// usages narrow — almost everything should go through the typed
+  /// methods on this class.
+  Database get db => _db;
+
   /// Hooks: callers can attach listeners to know when a write happened so
   /// they can fire a cloud sync. Kept on the repo (not the DB) so background
   /// cron writes don't trigger spurious uploads.

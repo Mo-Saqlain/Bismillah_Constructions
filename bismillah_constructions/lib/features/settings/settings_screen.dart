@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -7,7 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/constants.dart';
 import '../../core/formatters.dart';
+import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import 'backups_list_screen.dart';
 import 'change_log_screen.dart';
@@ -373,6 +376,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          if (SupabaseConfig.configured) ...[
+            _SectionTitle('Cloud Sync'),
+            const _CloudSyncCard(),
+            const SizedBox(height: 12),
+          ],
           _SectionTitle('Audit'),
           Card(
             child: ListTile(
@@ -478,6 +486,223 @@ class _ThemeOption extends StatelessWidget {
           : Icons.radio_button_unchecked),
       title: Text(label),
       onTap: () => onSelect(value),
+    );
+  }
+}
+
+/// Settings card for Supabase cloud sync. Shown only when
+/// [SupabaseConfig.configured] is true at build time. Owner sees:
+///   * On/off toggle.
+///   * Live sync status + last sync timestamp + pending count.
+///   * Manual "Sync now" button.
+///   * Tenant ID with copy + paste (for sharing the dataset with a
+///     second device).
+class _CloudSyncCard extends ConsumerStatefulWidget {
+  const _CloudSyncCard();
+
+  @override
+  ConsumerState<_CloudSyncCard> createState() => _CloudSyncCardState();
+}
+
+class _CloudSyncCardState extends ConsumerState<_CloudSyncCard> {
+  bool? _enabled;
+  String? _tenantId;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final repo = await ref.read(entityRepoProvider.future);
+    final enabled = await repo.cloudSyncEnabled();
+    final tenant = await repo.tenantIdOrNull();
+    if (!mounted) return;
+    setState(() {
+      _enabled = enabled;
+      _tenantId = tenant;
+    });
+  }
+
+  Future<void> _setEnabled(bool v) async {
+    final repo = await ref.read(entityRepoProvider.future);
+    await repo.setCloudSyncEnabled(v);
+    if (!mounted) return;
+    setState(() => _enabled = v);
+    if (v) {
+      // Kick a sync straight away so the user gets visible feedback
+      // that the toggle actually did something.
+      final svc = await ref.read(syncServiceFutureProvider.future);
+      unawaited(svc.syncNow());
+    }
+  }
+
+  Future<void> _syncNow() async {
+    setState(() => _busy = true);
+    try {
+      final svc = await ref.read(syncServiceFutureProvider.future);
+      await svc.syncNow();
+      await _load();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _editTenantId() async {
+    final ctrl = TextEditingController(text: _tenantId ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.fingerprint, size: 36),
+        title: const Text('Set tenant ID'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+                'Paste the UUID copied from your other device so both '
+                'phones see the same data. Leave blank to keep the '
+                'current value.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Tenant UUID',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Changing this on a device that already has data WILL NOT '
+              'move existing rows — they remain tagged with the previous '
+              'tenant on push. Set this before the first sync on a new '
+              'device.',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    final raw = ctrl.text.trim();
+    if (raw.isEmpty) return;
+    final repo = await ref.read(entityRepoProvider.future);
+    await repo.setTenantId(raw);
+    if (!mounted) return;
+    setState(() => _tenantId = raw);
+  }
+
+  String _stateLabel(SyncState s) => switch (s) {
+        SyncState.idle => 'Idle',
+        SyncState.syncing => 'Syncing…',
+        SyncState.error => 'Error',
+        SyncState.offline => 'Offline',
+        SyncState.disabled => 'Disabled',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ref.watch(syncStatusProvider);
+    return Card(
+      child: Column(
+        children: [
+          SwitchListTile.adaptive(
+            secondary: const Icon(Icons.cloud_sync_outlined),
+            title: const Text('Cloud sync to Supabase'),
+            subtitle: const Text(
+                'Push every write to your Supabase project. Required '
+                'for second-device sync.'),
+            value: _enabled ?? true,
+            onChanged: _enabled == null ? null : _setEnabled,
+          ),
+          const Divider(height: 1),
+          status.when(
+            loading: () => const ListTile(
+              leading: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              title: Text('Connecting…'),
+            ),
+            error: (e, _) => ListTile(
+              leading: const Icon(Icons.cloud_off),
+              title: const Text('Sync status unavailable'),
+              subtitle: Text('$e'),
+            ),
+            data: (s) => ListTile(
+              leading: Icon(switch (s.state) {
+                SyncState.idle => Icons.cloud_done_outlined,
+                SyncState.syncing => Icons.cloud_sync_outlined,
+                SyncState.error => Icons.cloud_off,
+                SyncState.offline => Icons.cloud_off,
+                SyncState.disabled => Icons.cloud_outlined,
+              }),
+              title: Text(_stateLabel(s.state)),
+              subtitle: Text([
+                if (s.lastSyncAt != null)
+                  'Last sync: ${fmtDateTime(s.lastSyncAt!)}'
+                else
+                  'Not synced yet',
+                if (s.pending > 0) '${s.pending} pending',
+                if (s.message != null) s.message!,
+              ].join(' · ')),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.refresh),
+            title: const Text('Sync now'),
+            subtitle: const Text(
+                'Push local changes, then pull any rows from other devices'),
+            trailing: _busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.chevron_right),
+            onTap: _busy ? null : _syncNow,
+          ),
+          ListTile(
+            leading: const Icon(Icons.fingerprint),
+            title: const Text('Tenant ID'),
+            subtitle: Text(
+              _tenantId ?? 'Generated on first sync',
+              style: const TextStyle(fontSize: 12),
+            ),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (_tenantId != null)
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  tooltip: 'Copy',
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    await Clipboard.setData(
+                        ClipboardData(text: _tenantId!));
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Tenant ID copied')),
+                    );
+                  },
+                ),
+              IconButton(
+                icon: const Icon(Icons.edit, size: 18),
+                tooltip: 'Set to a different tenant',
+                onPressed: _editTenantId,
+              ),
+            ]),
+          ),
+        ],
+      ),
     );
   }
 }
