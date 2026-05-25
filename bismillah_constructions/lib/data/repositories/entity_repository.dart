@@ -7,9 +7,11 @@ import '../../core/constants.dart';
 import '../models/bank.dart';
 import '../models/change_log.dart';
 import '../models/counter_entity.dart';
+import '../models/follow_up.dart';
 import '../models/labour_type_def.dart';
 import '../models/material_item.dart';
 import '../models/material_type_def.dart';
+import '../models/note.dart';
 import '../models/party.dart';
 import '../models/project.dart';
 
@@ -73,6 +75,7 @@ class EntityRepository {
     double? budget,
     String? projectManager,
     double? serviceFeePercent,
+    int? completionPercent,
   }) async {
     final updates = <String, Object?>{};
     if (name != null) updates['name'] = name.trim();
@@ -90,9 +93,19 @@ class EntityRepository {
     if (serviceFeePercent != null) {
       updates['service_fee_percent'] = serviceFeePercent;
     }
+    if (completionPercent != null) {
+      // Clamp to 0..100; callers can feed a slider's raw value without
+      // worrying about overflow.
+      updates['completion_percent'] = completionPercent.clamp(0, 100);
+    }
     if (updates.isEmpty) return;
     await _db.update('projects', updates, where: 'id = ?', whereArgs: [id]);
   }
+
+  /// Standalone helper so callers (e.g. the snapshot screen's slider) can
+  /// bump completion without touching any other field.
+  Future<void> updateProjectCompletion(String id, int percent) =>
+      updateProjectFields(id, completionPercent: percent);
 
   Future<List<Project>> projects(
       {bool activeOnly = false, bool includeArchived = false}) async {
@@ -883,6 +896,256 @@ class EntityRepository {
   Future<bool> deleteLabourType(String id) async {
     final n = await _db.delete('labour_types', where: 'id = ?', whereArgs: [id]);
     return n > 0;
+  }
+
+  // ---- Notes (v14: operational memory) ----
+
+  /// Notes for one entity (project / supplier), pinned first then
+  /// newest-first. Soft-deleted rows are excluded.
+  Future<List<Note>> notesFor(NoteEntityType type, String entityId) async {
+    final rows = await _db.query(
+      'notes',
+      where: 'entity_type = ? AND entity_id = ? AND is_deleted = 0',
+      whereArgs: [type.db, entityId],
+      orderBy: 'is_pinned DESC, created_at DESC',
+    );
+    return rows.map(Note.fromMap).toList();
+  }
+
+  /// Cross-entity search for the global note browser. Case-insensitive
+  /// substring match on the note body; results are ordered pinned-first
+  /// then newest-first.
+  Future<List<Note>> searchNotes(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final rows = await _db.query(
+      'notes',
+      where: 'is_deleted = 0 AND body LIKE ? COLLATE NOCASE',
+      whereArgs: ['%$q%'],
+      orderBy: 'is_pinned DESC, created_at DESC',
+      limit: 200,
+    );
+    return rows.map(Note.fromMap).toList();
+  }
+
+  Future<Note> addNote({
+    required NoteEntityType type,
+    required String entityId,
+    required String body,
+    bool pinned = false,
+  }) async {
+    final clean = body.trim();
+    if (clean.isEmpty) {
+      throw ArgumentError('Note body must not be empty.');
+    }
+    final n = Note(
+      id: _uuid.v4(),
+      entityType: type,
+      entityId: entityId,
+      body: clean,
+      isPinned: pinned,
+      createdAt: DateTime.now().toUtc(),
+    );
+    await _db.insert('notes', n.toMap());
+    return n;
+  }
+
+  Future<void> updateNoteBody(String id, String body) async {
+    final clean = body.trim();
+    if (clean.isEmpty) return;
+    await _db.update(
+      'notes',
+      {
+        'body': clean,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> toggleNotePin(String id, bool pinned) async {
+    await _db.update(
+      'notes',
+      {'is_pinned': pinned ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Soft-delete. Hard-delete is never exposed — keeping the row lets a
+  /// future "trash" surface restore it.
+  Future<void> deleteNote(String id) async {
+    await _db.update(
+      'notes',
+      {
+        'is_deleted': 1,
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // ---- Follow-Ups (v14: customer recovery / promise tracking) ----
+
+  /// All pending follow-ups, sorted overdue-first then by priority
+  /// (high → low) then by expected date (soonest first).
+  Future<List<FollowUp>> pendingFollowUps() async {
+    final rows = await _db.query(
+      'follow_ups',
+      where: "status = 'pending' AND is_deleted = 0",
+      orderBy: 'created_at DESC',
+    );
+    final list = rows.map(FollowUp.fromMap).toList();
+    final now = DateTime.now();
+    int priorityRank(FollowUpPriority p) => switch (p) {
+          FollowUpPriority.high => 0,
+          FollowUpPriority.medium => 1,
+          FollowUpPriority.low => 2,
+        };
+    list.sort((a, b) {
+      final aOverdue = a.isOverdue(now);
+      final bOverdue = b.isOverdue(now);
+      if (aOverdue != bOverdue) return aOverdue ? -1 : 1;
+      final pr = priorityRank(a.priority).compareTo(priorityRank(b.priority));
+      if (pr != 0) return pr;
+      final ad = a.expectedDate ?? DateTime(9999);
+      final bd = b.expectedDate ?? DateTime(9999);
+      return ad.compareTo(bd);
+    });
+    return list;
+  }
+
+  /// Overdue follow-ups only (pending + expected_date < now). Used by the
+  /// dashboard tile so the user is nudged to chase late commitments.
+  Future<List<FollowUp>> overdueFollowUps() async {
+    final pending = await pendingFollowUps();
+    final now = DateTime.now();
+    return pending.where((f) => f.isOverdue(now)).toList();
+  }
+
+  /// Resolved (or cancelled) follow-ups for the history surface.
+  Future<List<FollowUp>> archivedFollowUps() async {
+    final rows = await _db.query(
+      'follow_ups',
+      where: "status IN ('resolved', 'cancelled') AND is_deleted = 0",
+      orderBy: 'resolved_at DESC, created_at DESC',
+    );
+    return rows.map(FollowUp.fromMap).toList();
+  }
+
+  Future<List<FollowUp>> followUpsForProject(String projectId) async {
+    final rows = await _db.query(
+      'follow_ups',
+      where: 'project_id = ? AND is_deleted = 0',
+      whereArgs: [projectId],
+      orderBy: "status = 'pending' DESC, created_at DESC",
+    );
+    return rows.map(FollowUp.fromMap).toList();
+  }
+
+  Future<FollowUp> addFollowUp({
+    required String title,
+    String? note,
+    String? projectId,
+    String? supplierId,
+    DateTime? expectedDate,
+    FollowUpPriority priority = FollowUpPriority.medium,
+    double? amountEstimate,
+  }) async {
+    final clean = title.trim();
+    if (clean.isEmpty) {
+      throw ArgumentError('Follow-up title must not be empty.');
+    }
+    final f = FollowUp(
+      id: _uuid.v4(),
+      projectId: projectId,
+      supplierId: supplierId,
+      title: clean,
+      note: note?.trim().isEmpty == true ? null : note?.trim(),
+      expectedDate: expectedDate?.toUtc(),
+      priority: priority,
+      status: FollowUpStatus.pending,
+      amountEstimate: amountEstimate,
+      createdAt: DateTime.now().toUtc(),
+    );
+    await _db.insert('follow_ups', f.toMap());
+    return f;
+  }
+
+  Future<void> updateFollowUp(
+    String id, {
+    String? title,
+    String? note,
+    DateTime? expectedDate,
+    FollowUpPriority? priority,
+    double? amountEstimate,
+  }) async {
+    final updates = <String, Object?>{};
+    if (title != null) {
+      final clean = title.trim();
+      if (clean.isEmpty) return;
+      updates['title'] = clean;
+    }
+    if (note != null) {
+      updates['note'] = note.trim().isEmpty ? null : note.trim();
+    }
+    if (expectedDate != null) {
+      updates['expected_date'] = expectedDate.toUtc().toIso8601String();
+    }
+    if (priority != null) updates['priority'] = priority.db;
+    if (amountEstimate != null) updates['amount_estimate'] = amountEstimate;
+    if (updates.isEmpty) return;
+    await _db.update('follow_ups', updates, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> resolveFollowUp(String id) async {
+    await _db.update(
+      'follow_ups',
+      {
+        'status': FollowUpStatus.resolved.db,
+        'resolved_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> cancelFollowUp(String id) async {
+    await _db.update(
+      'follow_ups',
+      {
+        'status': FollowUpStatus.cancelled.db,
+        'resolved_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> reopenFollowUp(String id) async {
+    await _db.update(
+      'follow_ups',
+      {
+        'status': FollowUpStatus.pending.db,
+        'resolved_at': null,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> deleteFollowUp(String id) async {
+    await _db.update(
+      'follow_ups',
+      {
+        'is_deleted': 1,
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   // ---- Settings ----

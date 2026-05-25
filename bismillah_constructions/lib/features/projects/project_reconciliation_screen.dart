@@ -33,6 +33,7 @@ class _ProjectReconciliationScreenState
   LabourRateClose? _close;
   ({double supplierPayables, double ledgerNet, double serviceFeeBooked})?
       _gate;
+  ProjectSnapshot? _snapshot;
   bool _loading = true;
   bool _busy = false;
 
@@ -47,6 +48,7 @@ class _ProjectReconciliationScreenState
     final rec = await repo.reconcileProject(widget.project.id);
     final outflow = await repo.projectOutflow(widget.project.id);
     final gate = await repo.projectArchiveStatus(widget.project.id);
+    final snapshot = await repo.projectSnapshot(widget.project.id);
     LabourRateClose? close;
     if (widget.project.model == ProjectModel.labourRate) {
       close = await repo.labourRateCloseSummary(
@@ -60,6 +62,7 @@ class _ProjectReconciliationScreenState
       _outflow = outflow;
       _close = close;
       _gate = gate;
+      _snapshot = snapshot;
       _loading = false;
     });
   }
@@ -207,7 +210,8 @@ class _ProjectReconciliationScreenState
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _rec == null || _outflow == null || _gate == null) {
+    if (_loading || _rec == null || _outflow == null || _gate == null ||
+        _snapshot == null) {
       return Scaffold(
         appBar: AppBar(title: Text(widget.project.name)),
         body: const Center(child: CircularProgressIndicator()),
@@ -218,6 +222,7 @@ class _ProjectReconciliationScreenState
     final rec = _rec!;
     final outflow = _outflow!;
     final gate = _gate!;
+    final snapshot = _snapshot!;
     final isLabour = p.model == ProjectModel.labourRate;
 
     final payablesOk = gate.supplierPayables.abs() < 0.01;
@@ -241,6 +246,8 @@ class _ProjectReconciliationScreenState
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          _ClosureAssistant(snapshot: snapshot, isLabour: isLabour),
+          const SizedBox(height: 8),
           _StatusBanner(
             ok: canArchive,
             ledgerNet: gate.ledgerNet,
@@ -498,6 +505,143 @@ class _SectionTitle extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(title, style: Theme.of(context).textTheme.titleSmall),
       );
+}
+
+/// Closure Assistant — financial reconciliation summary that sits at the
+/// top of the archive screen. Surfaces the same numbers the formal gate
+/// checks plus the projected final P&L, so the owner understands what
+/// they're about to archive instead of just satisfying a gate.
+class _ClosureAssistant extends StatelessWidget {
+  const _ClosureAssistant({required this.snapshot, required this.isLabour});
+  final ProjectSnapshot snapshot;
+  final bool isLabour;
+
+  @override
+  Widget build(BuildContext context) {
+    final warnings = <String>[];
+    if (snapshot.supplierPayables.abs() >= 0.01) {
+      warnings.add(
+          'Supplier payables of ${fmtMoney(snapshot.supplierPayables)} are still open.');
+    }
+    if (snapshot.budget > 0 && snapshot.spent > snapshot.budget) {
+      warnings.add(
+          'Costs have exceeded budget by ${fmtMoney(snapshot.spent - snapshot.budget)}.');
+    }
+    if (snapshot.budget > 0 && snapshot.received < snapshot.budget && !isLabour) {
+      warnings.add(
+          'Customer has paid ${fmtMoney(snapshot.budget - snapshot.received)} less than the contract value.');
+    }
+    if (isLabour && snapshot.customerDeposit > 0.01) {
+      warnings.add(
+          'Customer deposit of ${fmtMoney(snapshot.customerDeposit)} still needs to be refunded or reclassified.');
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.summarize,
+                    color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Closure summary',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        )),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _SummaryRow(label: 'Budget', value: snapshot.budget),
+            _SummaryRow(label: 'Received', value: snapshot.received),
+            _SummaryRow(label: 'Spent', value: snapshot.spent),
+            _SummaryRow(
+                label: 'Supplier payables outstanding',
+                value: snapshot.supplierPayables,
+                colorize: snapshot.supplierPayables > 0.01
+                    ? -snapshot.supplierPayables
+                    : null),
+            _SummaryRow(
+                label: 'Customer deposit (cash trapped)',
+                value: snapshot.customerDeposit),
+            const Divider(),
+            _SummaryRow(
+              label: 'Projected profit at close',
+              value: snapshot.projectedFinalProfit,
+              colorize: snapshot.projectedFinalProfit,
+              bold: true,
+            ),
+            if (warnings.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Icon(Icons.warning_amber_rounded,
+                          color: BalanceColors.negative(context), size: 18),
+                      const SizedBox(width: 6),
+                      Text('Heads up before archiving',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: BalanceColors.negative(context))),
+                    ]),
+                    const SizedBox(height: 4),
+                    for (final w in warnings)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text('• $w'),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  const _SummaryRow({
+    required this.label,
+    required this.value,
+    this.colorize,
+    this.bold = false,
+  });
+  final String label;
+  final double value;
+  final double? colorize;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = colorize == null
+        ? null
+        : BalanceColors.signed(context, colorize!);
+    final style = TextStyle(
+      fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+      color: color,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Text(fmtSignedMoney(value), style: style),
+        ],
+      ),
+    );
+  }
 }
 
 class _Row extends StatelessWidget {

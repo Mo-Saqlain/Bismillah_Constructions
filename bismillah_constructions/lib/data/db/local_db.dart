@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 13);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 14);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 13,
+        version: 14,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -120,6 +120,10 @@ class LocalDb {
         budget REAL,
         project_manager TEXT,
         service_fee_percent REAL,
+        -- v14: manual completion estimate (0..100) entered by the owner.
+        -- Intentionally not derived from BOQ / quantities — this is a
+        -- gut-feel number that informs dashboards and forecasting.
+        completion_percent INTEGER NOT NULL DEFAULT 0,
         is_archived INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT,
         created_at TEXT NOT NULL
@@ -248,6 +252,56 @@ class LocalDb {
         created_at TEXT NOT NULL
       )
     ''');
+
+    // v14: operational memory layer.
+    //   * `notes` — free-text notes attached to a project / supplier. The
+    //     entity column pair (`entity_type`, `entity_id`) is intentionally
+    //     un-FK'd so notes survive a hard-delete of the entity (rare, but
+    //     guards against orphan-cleanup losing history).
+    //   * `follow_ups` — customer / supplier payment-recovery tracker.
+    //     Lightweight CRM-replacement: an expected date, a priority, a
+    //     status, optional ties to project and party.
+    await db.execute('''
+      CREATE TABLE notes (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL,             -- 'project' | 'supplier'
+        entity_id TEXT NOT NULL,
+        body TEXT NOT NULL,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX idx_notes_entity ON notes(entity_type, entity_id)');
+    await db.execute(
+        'CREATE INDEX idx_notes_pinned ON notes(is_pinned, is_deleted)');
+
+    await db.execute('''
+      CREATE TABLE follow_ups (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        supplier_id TEXT REFERENCES suppliers(id),
+        title TEXT NOT NULL,
+        note TEXT,
+        expected_date TEXT,                    -- ISO-8601 UTC, nullable
+        priority TEXT NOT NULL DEFAULT 'medium', -- 'low' | 'medium' | 'high'
+        status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'resolved' | 'cancelled'
+        amount_estimate REAL,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX idx_followups_status ON follow_ups(status, is_deleted)');
+    await db.execute(
+        'CREATE INDEX idx_followups_project ON follow_ups(project_id)');
+    await db.execute(
+        'CREATE INDEX idx_followups_supplier ON follow_ups(supplier_id)');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -519,6 +573,62 @@ class LocalDb {
           await db.execute(ddl);
         } catch (_) {/* column may already exist on partial upgrades */}
       }
+    }
+
+    if (oldVersion < 14) {
+      // v14: operational-memory layer.
+      //   * Manual `completion_percent` on projects (owner-entered, 0..100).
+      //   * `notes` table for free-text memory attached to projects /
+      //     suppliers.
+      //   * `follow_ups` table for customer recovery + payment-promise
+      //     tracking — separate from `change_log` because these are
+      //     forward-looking, not audit records.
+      try {
+        await db.execute(
+            'ALTER TABLE projects ADD COLUMN completion_percent INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {/* column may already exist on partial upgrades */}
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          body TEXT NOT NULL,
+          is_pinned INTEGER NOT NULL DEFAULT 0,
+          is_deleted INTEGER NOT NULL DEFAULT 0,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_notes_entity ON notes(entity_type, entity_id)');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned, is_deleted)');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS follow_ups (
+          id TEXT PRIMARY KEY,
+          project_id TEXT REFERENCES projects(id),
+          supplier_id TEXT REFERENCES suppliers(id),
+          title TEXT NOT NULL,
+          note TEXT,
+          expected_date TEXT,
+          priority TEXT NOT NULL DEFAULT 'medium',
+          status TEXT NOT NULL DEFAULT 'pending',
+          amount_estimate REAL,
+          is_deleted INTEGER NOT NULL DEFAULT 0,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          resolved_at TEXT
+        )
+      ''');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_followups_status ON follow_ups(status, is_deleted)');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_followups_project ON follow_ups(project_id)');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_followups_supplier ON follow_ups(supplier_id)');
     }
 
     if (oldVersion < 3) {

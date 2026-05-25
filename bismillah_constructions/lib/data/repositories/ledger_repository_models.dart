@@ -269,6 +269,88 @@ class LabourRateClose {
   double get customerOwesUs => netToSettle < 0 ? -netToSettle : 0;
 }
 
+/// One-screen aggregate consumed by the Site Snapshot screen and the
+/// Project Closure Assistant. Everything here is derived from the ledger
+/// + the project row — no separate state, no caching.
+class ProjectSnapshot {
+  final String projectId;
+  final String? model;
+  final double budget;
+  final double received;
+  final double spent;
+  final double materialCosts;
+  final double labourCosts;
+  final double serviceFeeBooked;
+  final double supplierPayables;
+
+  /// Money received but not yet earned (PoC cost-recovery).
+  final double customerDeposit;
+
+  /// Profit recognized so far: revenue minus spend minus deposit liability.
+  final double realizedProfit;
+
+  /// Owner-entered manual completion estimate (0..100). 0 means "no
+  /// estimate yet" and the snapshot falls back to budget headroom.
+  final int completionPercent;
+
+  /// Forecast cost to reach 100% completion. When `completionPercent` is
+  /// 0, equals `max(budget − spent, 0)`. When >0, uses the linear
+  /// extrapolation `spent / pct × (100 − pct)`.
+  final double projectedRemainingCost;
+
+  /// Forecast remaining customer receivable: `max(budget − received, 0)`.
+  final double projectedReceivable;
+
+  /// `projectedRemainingCost − projectedReceivable`. Positive means cash
+  /// stress ahead (you'll spend more than you have left to collect);
+  /// negative means surplus.
+  final double projectedCashGap;
+
+  /// Projected bottom-line profit at close. For WM:
+  /// `budget − (spent + projectedRemainingCost)`. For LR or budget=0
+  /// projects: `received − projected total cost`.
+  final double projectedFinalProfit;
+
+  const ProjectSnapshot({
+    required this.projectId,
+    required this.model,
+    required this.budget,
+    required this.received,
+    required this.spent,
+    required this.materialCosts,
+    required this.labourCosts,
+    required this.serviceFeeBooked,
+    required this.supplierPayables,
+    required this.customerDeposit,
+    required this.realizedProfit,
+    required this.completionPercent,
+    required this.projectedRemainingCost,
+    required this.projectedReceivable,
+    required this.projectedCashGap,
+    required this.projectedFinalProfit,
+  });
+
+  /// Risk band based on how much of the budget has been consumed and
+  /// whether the project is already over-budget. Drives the snapshot
+  /// card's color treatment.
+  ///   * `green`  — under 80% of budget consumed.
+  ///   * `amber`  — between 80% and 100%.
+  ///   * `red`    — over 100% of budget OR projected to overrun.
+  String get riskBand {
+    if (budget <= 0) return 'green';
+    final pctConsumed = spent / budget * 100;
+    if (pctConsumed >= 100) return 'red';
+    final projectedTotal = spent + projectedRemainingCost;
+    if (projectedTotal > budget * 1.05) return 'red';
+    if (pctConsumed >= 80) return 'amber';
+    return 'green';
+  }
+
+  /// Cost-consumption percentage (0..100+). Used by progress bars.
+  double get pctOfBudgetConsumed =>
+      budget > 0 ? spent / budget * 100 : 0;
+}
+
 class ProjectReconciliation {
   /// Total received from the project (credits to PROJECT_REV for this project).
   final double projectInflow;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../followups/followups_screen.dart';
 import '../parties/banks_screen.dart';
 import '../parties/parties_screen.dart';
 import '../projects/projects_screen.dart';
@@ -75,6 +76,17 @@ class ManageScreen extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const LabourTypesScreen()),
+            ),
+          ),
+          _ManageCard(
+            icon: Icons.pending_actions,
+            color: Colors.deepPurple,
+            title: 'Recovery Follow-ups',
+            subtitle:
+                'Verbal payment promises and chase reminders — not yet accounting entries',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FollowUpsScreen()),
             ),
           ),
         ],

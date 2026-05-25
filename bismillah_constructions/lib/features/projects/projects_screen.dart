@@ -8,6 +8,7 @@ import '../../data/models/project.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import 'project_reconciliation_screen.dart';
+import 'site_snapshot_screen.dart';
 
 class ProjectsScreen extends ConsumerStatefulWidget {
   const ProjectsScreen({super.key});
@@ -132,6 +133,20 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
+            ListTile(
+              leading: const Icon(Icons.dashboard_outlined),
+              title: const Text('Open snapshot'),
+              subtitle: const Text(
+                  'Budget vs spend, forecast, completion, notes, follow-ups'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => SiteSnapshotScreen(project: project)),
+                );
+              },
+            ),
             if (!project.archived)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),

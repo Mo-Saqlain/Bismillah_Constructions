@@ -3,10 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants.dart';
 import '../data/models/bank.dart';
 import '../data/models/counter_entity.dart';
+import '../data/models/follow_up.dart';
 import '../data/models/labour_type_def.dart';
 import '../data/models/material_type_def.dart';
+import '../data/models/note.dart';
 import '../data/models/party.dart';
 import '../data/models/project.dart';
+import '../data/repositories/ledger_repository.dart';
 import 'db_providers.dart';
 
 final projectsProvider = FutureProvider<List<Project>>((ref) async {
@@ -87,4 +90,44 @@ final labourTypesProvider =
   ref.watch(ledgerVersionProvider);
   final repo = await ref.watch(entityRepoProvider.future);
   return repo.labourTypes();
+});
+
+// ── v14: Notes ─────────────────────────────────────────────────────────
+
+/// Notes attached to one entity (project / supplier). The family key is a
+/// `(type, entityId)` record so the same provider serves both surfaces.
+final notesForProvider = FutureProvider.family<List<Note>,
+    ({NoteEntityType type, String entityId})>((ref, key) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.notesFor(key.type, key.entityId);
+});
+
+// ── v14: Follow-Ups ────────────────────────────────────────────────────
+
+final pendingFollowUpsProvider = FutureProvider<List<FollowUp>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.pendingFollowUps();
+});
+
+final overdueFollowUpsProvider = FutureProvider<List<FollowUp>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.overdueFollowUps();
+});
+
+final archivedFollowUpsProvider = FutureProvider<List<FollowUp>>((ref) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(entityRepoProvider.future);
+  return repo.archivedFollowUps();
+});
+
+// ── v14: Project Snapshot ──────────────────────────────────────────────
+
+final projectSnapshotProvider =
+    FutureProvider.family<ProjectSnapshot, String>((ref, projectId) async {
+  ref.watch(ledgerVersionProvider);
+  final repo = await ref.watch(ledgerRepoProvider.future);
+  return repo.projectSnapshot(projectId);
 });

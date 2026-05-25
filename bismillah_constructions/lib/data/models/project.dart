@@ -18,6 +18,11 @@ class Project {
   /// Service fee % for Labour-Rate model (e.g. 5 means 5% of total spend).
   final double? serviceFeePercent;
 
+  /// v14: owner-entered rough progress estimate (0..100). Intentionally not
+  /// derived from BOQ / quantities — this is a gut-feel number used for
+  /// the dashboard progress bar and forecasting context.
+  final int completionPercent;
+
   /// 1 = archived (soft delete). Data preserved for legal evidence.
   final int isArchived;
   final DateTime? archivedAt;
@@ -33,6 +38,7 @@ class Project {
     this.budget,
     this.projectManager,
     this.serviceFeePercent,
+    this.completionPercent = 0,
     this.isArchived = 0,
     this.archivedAt,
   });
@@ -50,6 +56,7 @@ class Project {
         'budget': budget,
         'project_manager': projectManager,
         'service_fee_percent': serviceFeePercent,
+        'completion_percent': completionPercent,
         'is_archived': isArchived,
         'archived_at': archivedAt?.toUtc().toIso8601String(),
       };
@@ -65,6 +72,7 @@ class Project {
         budget: (m['budget'] as num?)?.toDouble(),
         projectManager: m['project_manager'] as String?,
         serviceFeePercent: (m['service_fee_percent'] as num?)?.toDouble(),
+        completionPercent: (m['completion_percent'] as num?)?.toInt() ?? 0,
         isArchived: (m['is_archived'] as int?) ?? 0,
         archivedAt: m['archived_at'] == null
             ? null
@@ -80,6 +88,7 @@ class Project {
     double? budget,
     String? projectManager,
     double? serviceFeePercent,
+    int? completionPercent,
     int? isArchived,
     DateTime? archivedAt,
   }) =>
@@ -94,6 +103,7 @@ class Project {
         budget: budget ?? this.budget,
         projectManager: projectManager ?? this.projectManager,
         serviceFeePercent: serviceFeePercent ?? this.serviceFeePercent,
+        completionPercent: completionPercent ?? this.completionPercent,
         isArchived: isArchived ?? this.isArchived,
         archivedAt: archivedAt ?? this.archivedAt,
       );

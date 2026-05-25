@@ -9,6 +9,7 @@ import '../../data/repositories/ledger_repository.dart';
 import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
+import '../followups/followups_screen.dart';
 import '../reports/bank_ledger_screen.dart';
 import '../transactions/transaction_history_screen.dart';
 import '../transactions/transaction_picker_screen.dart';
@@ -118,6 +119,8 @@ class DashboardScreen extends ConsumerWidget {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 8),
+                  const _OverdueFollowUpsTile(),
                   if (s.counterReceivables > 0 || s.counterPayables > 0) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -780,6 +783,59 @@ class _SyncIndicator extends StatelessWidget {
         return Tooltip(
           message: '$label${s.pending > 0 ? ' · ${s.pending} pending' : ''}',
           child: Icon(icon),
+        );
+      },
+    );
+  }
+}
+
+/// Dashboard tile shown only when there are pending follow-ups. Highlights
+/// overdue ones in red. Tap → Recovery Follow-ups screen.
+class _OverdueFollowUpsTile extends ConsumerWidget {
+  const _OverdueFollowUpsTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pending = ref.watch(pendingFollowUpsProvider);
+    return pending.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (items) {
+        if (items.isEmpty) return const SizedBox.shrink();
+        final overdue = items.where((f) => f.isOverdue()).toList();
+        final hasOverdue = overdue.isNotEmpty;
+        final scheme = Theme.of(context).colorScheme;
+        return Card(
+          color: hasOverdue ? scheme.errorContainer : null,
+          child: ListTile(
+            leading: Icon(
+              hasOverdue
+                  ? Icons.warning_amber_rounded
+                  : Icons.pending_actions,
+              color: hasOverdue
+                  ? BalanceColors.negative(context)
+                  : scheme.primary,
+            ),
+            title: Text(
+              hasOverdue
+                  ? '${overdue.length} overdue follow-up${overdue.length == 1 ? "" : "s"}'
+                  : '${items.length} pending follow-up${items.length == 1 ? "" : "s"}',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: hasOverdue ? BalanceColors.negative(context) : null,
+              ),
+            ),
+            subtitle: Text(
+              hasOverdue
+                  ? 'Chase these — promised dates have passed.'
+                  : 'Verbal commitments waiting for cash to land.',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FollowUpsScreen()),
+            ),
+          ),
         );
       },
     );

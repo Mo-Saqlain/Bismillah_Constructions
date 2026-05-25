@@ -1248,6 +1248,111 @@ class LedgerRepository {
     return mat + lab;
   }
 
+  /// One-screen aggregate for the Site Snapshot + Closure Assistant.
+  ///
+  /// Everything here is derived from existing ledger queries — this method
+  /// just bundles them so the UI doesn't have to fire half a dozen async
+  /// calls in sequence. Nothing here writes; safe to call from any read
+  /// surface.
+  ///
+  /// `expectedRemainingCost` and `expectedRemainingReceivable` come from
+  /// the project row itself (caller-provided budget + received deltas);
+  /// the snapshot adds them in so the projected close P&L is meaningful
+  /// for projects that aren't done yet.
+  Future<ProjectSnapshot> projectSnapshot(String projectId) async {
+    final received =
+        await sumCredits(Accounts.projectRevenue.id, projectId: projectId);
+    final matCosts =
+        await sumDebits(Accounts.materialCosts.id, projectId: projectId);
+    final labCosts =
+        await sumDebits(Accounts.labourCosts.id, projectId: projectId);
+    final spent = matCosts + labCosts;
+
+    final supplierPaid =
+        await sumDebits(Accounts.supplierPayables.id, projectId: projectId);
+    final supplierCredits =
+        await sumCredits(Accounts.supplierPayables.id, projectId: projectId);
+    final supplierPayables = supplierCredits - supplierPaid;
+
+    final feeCr =
+        await sumCredits(Accounts.serviceFeeIncome.id, projectId: projectId);
+
+    // Pull the project's budget for the over/under math.
+    final projRows = await _db.rawQuery(
+      'SELECT budget, model, completion_percent FROM projects WHERE id = ? LIMIT 1',
+      [projectId],
+    );
+    final budget = projRows.isEmpty
+        ? 0.0
+        : ((projRows.first['budget'] as num?)?.toDouble() ?? 0.0);
+    final model = projRows.isEmpty
+        ? null
+        : projRows.first['model'] as String?;
+    final completionPercent = projRows.isEmpty
+        ? 0
+        : ((projRows.first['completion_percent'] as num?)?.toInt() ?? 0);
+
+    // Customer deposit = money received that hasn't been earned yet under
+    // PoC. For With-Material that's `max(received − spent, 0)`; for LR
+    // it's the residual after costs.
+    final customerDeposit = (received - spent).clamp(0.0, double.infinity);
+
+    // Forecast remaining cost using the completion% slider — when the
+    // owner says we're 60% done with Rs 600k spent, projected cost to
+    // complete is Rs 1m. Falls back to budget vs spent when completion is
+    // 0 (no estimate yet).
+    double projectedRemainingCost;
+    if (completionPercent >= 100) {
+      projectedRemainingCost = 0;
+    } else if (completionPercent > 0 && spent > 0) {
+      final projectedTotal = spent * 100 / completionPercent;
+      projectedRemainingCost = (projectedTotal - spent).clamp(0.0, double.infinity);
+    } else {
+      // No completion% supplied → budget headroom is the best we have.
+      projectedRemainingCost = (budget - spent).clamp(0.0, double.infinity);
+    }
+
+    final projectedReceivable = (budget - received).clamp(0.0, double.infinity);
+    final projectedCashGap =
+        (projectedRemainingCost - projectedReceivable).clamp(
+      -double.infinity,
+      double.infinity,
+    );
+
+    // Realized profit so far — for closed projects this is the actual
+    // bottom line; for active projects it's a snapshot showing how much
+    // recognized revenue exceeds spend (cost-recovery PoC means this is
+    // typically 0 mid-project for WM, and ~serviceFee for LR).
+    final realizedProfit = (received - spent) - customerDeposit;
+
+    // Final-profit forecast = budget − projected total cost − any
+    // already-recognized service fee bundled into received. For WM the
+    // expression simplifies to `budget − (spent + projectedRemainingCost)`,
+    // showing whether the contract is heading for a loss.
+    final projectedFinalCost = spent + projectedRemainingCost;
+    final projectedFinalProfit =
+        budget > 0 ? budget - projectedFinalCost : received - projectedFinalCost;
+
+    return ProjectSnapshot(
+      projectId: projectId,
+      model: model,
+      budget: budget,
+      received: received,
+      spent: spent,
+      materialCosts: matCosts,
+      labourCosts: labCosts,
+      serviceFeeBooked: feeCr,
+      supplierPayables: supplierPayables,
+      customerDeposit: customerDeposit,
+      realizedProfit: realizedProfit,
+      completionPercent: completionPercent,
+      projectedRemainingCost: projectedRemainingCost,
+      projectedReceivable: projectedReceivable,
+      projectedCashGap: projectedCashGap,
+      projectedFinalProfit: projectedFinalProfit,
+    );
+  }
+
   /// Closing snapshot for a Labour-Rate project.
   ///
   /// In the labour-rate model the contractor is a pass-through:
