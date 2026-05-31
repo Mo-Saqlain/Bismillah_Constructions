@@ -1254,6 +1254,91 @@ class LedgerRepository {
     return mat + lab;
   }
 
+  /// Per-supplier spend roll-up for a project. Sums material- and
+  /// labour-cost debits tagged with the given project + supplier, optionally
+  /// scoped to a date window. The result is sorted highest-spend first so
+  /// the trial-balance breakdown card can render it directly.
+  ///
+  /// Returns rows of `(supplierId, total)`. Counter-purchase material
+  /// (no supplier) is bucketed under an empty-string supplierId — the
+  /// caller can resolve that to a display label.
+  Future<List<({String supplierId, double total})>>
+      projectSupplierBreakdown(
+    String projectId, {
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final where = StringBuffer(
+        'project_id = ? AND account_id IN (?, ?) AND is_deleted = 0');
+    final args = <Object>[
+      projectId,
+      Accounts.materialCosts.id,
+      Accounts.labourCosts.id,
+    ];
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at <= ?');
+      args.add(to.toUtc().toIso8601String());
+    }
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(supplier_id, \'\') AS sid, '
+      'COALESCE(SUM(debit), 0) AS total '
+      'FROM journal_entries '
+      'WHERE ${where.toString()} '
+      'GROUP BY supplier_id '
+      'ORDER BY total DESC',
+      args,
+    );
+    return rows
+        .map((r) => (
+              supplierId: r['sid'] as String,
+              total: ((r['total'] as num?) ?? 0).toDouble(),
+            ))
+        .where((r) => r.total > 0)
+        .toList();
+  }
+
+  /// Per-material-type spend roll-up for a project. Reads
+  /// `material_inventory` rather than `journal_entries` because the
+  /// material type is denormalised there (the ledger only carries the
+  /// rupee amount). Soft-deleted rows are excluded via the v13 linkage.
+  Future<List<({String materialType, double total})>>
+      projectMaterialBreakdown(
+    String projectId, {
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final where = StringBuffer('project_id = ? AND is_deleted = 0');
+    final args = <Object>[projectId];
+    if (from != null) {
+      where.write(' AND created_at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.write(' AND created_at <= ?');
+      args.add(to.toUtc().toIso8601String());
+    }
+    final rows = await _db.rawQuery(
+      'SELECT material_type AS mat, '
+      'COALESCE(SUM(total_cost), 0) AS total '
+      'FROM material_inventory '
+      'WHERE ${where.toString()} '
+      'GROUP BY material_type '
+      'ORDER BY total DESC',
+      args,
+    );
+    return rows
+        .map((r) => (
+              materialType: (r['mat'] as String?) ?? 'Other',
+              total: ((r['total'] as num?) ?? 0).toDouble(),
+            ))
+        .where((r) => r.total > 0)
+        .toList();
+  }
+
   /// One-screen aggregate for the Site Snapshot + Closure Assistant.
   ///
   /// Everything here is derived from existing ledger queries — this method

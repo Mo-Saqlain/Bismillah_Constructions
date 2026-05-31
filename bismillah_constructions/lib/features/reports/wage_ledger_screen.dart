@@ -10,6 +10,7 @@ import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
+import '../common/trial_balance_card.dart';
 import '../../core/export/csv_export.dart';
 import '../../core/export/pdf_generator.dart';
 
@@ -308,6 +309,8 @@ class _WageLedgerScreenState extends ConsumerState<WageLedgerScreen> {
         data: (entries) {
           final rows = _toRows(entries);
           final balance = rows.isEmpty ? 0.0 : rows.last.balance;
+          final wagesTotal = rows.fold<double>(0, (a, r) => a + r.debit);
+          final paidTotal = rows.fold<double>(0, (a, r) => a + r.credit);
           return LedgerView(
             title: widget.worker.name,
             subtitle: '${widget.worker.phone == null ? '' : 'Ph: ${widget.worker.phone} · '}'
@@ -353,6 +356,31 @@ class _WageLedgerScreenState extends ConsumerState<WageLedgerScreen> {
                     ],
                     onChanged: (v) => setState(() => _projectId = v),
                   ),
+                ),
+                const SizedBox(height: 12),
+                TrialBalanceCard(
+                  title: 'Trial balance',
+                  entryCount: rows.length,
+                  rows: [
+                    TrialBalanceRow(
+                      label: 'Wages booked',
+                      value: wagesTotal,
+                    ),
+                    TrialBalanceRow(
+                      label: 'Paid',
+                      value: paidTotal,
+                    ),
+                    TrialBalanceRow(
+                      label: balance >= 0
+                          ? 'Owed to worker'
+                          : 'Overpaid (worker owes us)',
+                      value: balance,
+                      bold: true,
+                      // Positive owed = liability for us → red.
+                      colorize: -balance,
+                      helper: 'Wages − Paid',
+                    ),
+                  ],
                 ),
               ],
             ),

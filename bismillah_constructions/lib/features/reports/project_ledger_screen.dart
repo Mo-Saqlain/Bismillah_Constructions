@@ -6,9 +6,11 @@ import '../../core/formatters.dart';
 import '../../data/models/journal_entry.dart';
 import '../../data/models/project.dart';
 import '../../providers/providers.dart';
+import '../../data/models/party.dart';
 import '../common/async_view.dart';
 import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
+import '../common/trial_balance_card.dart';
 import '../../core/export/csv_export.dart';
 import '../../core/export/pdf_generator.dart';
 
@@ -214,6 +216,8 @@ class _ProjectLedgerScreenState extends ConsumerState<ProjectLedgerScreen> {
         data: (entries) {
           final rows = _toRows(entries);
           final total = rows.isEmpty ? 0.0 : rows.last.balance;
+          final totalDr = entries.fold<double>(0, (a, e) => a + e.debit);
+          final totalCr = entries.fold<double>(0, (a, e) => a + e.credit);
           return LedgerView(
             title: widget.project.name,
             subtitle: '${widget.project.model.label}'
@@ -224,13 +228,40 @@ class _ProjectLedgerScreenState extends ConsumerState<ProjectLedgerScreen> {
             totalValue: total,
             signedTotal: true,
             emptyMessage: 'No transactions for this project in the period.',
-            headerBelowTitle: DateRangeBar(
-              from: _from,
-              to: _to,
-              onChanged: (f, t) => setState(() {
-                _from = f;
-                _to = t;
-              }),
+            headerBelowTitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DateRangeBar(
+                  from: _from,
+                  to: _to,
+                  onChanged: (f, t) => setState(() {
+                    _from = f;
+                    _to = t;
+                  }),
+                ),
+                const SizedBox(height: 12),
+                TrialBalanceCard(
+                  title: 'Trial balance',
+                  entryCount: entries.length,
+                  rows: [
+                    TrialBalanceRow(label: 'Total Debits', value: totalDr),
+                    TrialBalanceRow(label: 'Total Credits', value: totalCr),
+                    TrialBalanceRow(
+                      label: 'Net Position',
+                      value: total,
+                      bold: true,
+                      colorize: total,
+                      helper: 'Costs − Revenue (project ledger convention)',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _ProjectBreakdown(
+                  projectId: widget.project.id,
+                  from: _from,
+                  to: _to,
+                ),
+              ],
             ),
           );
         },
@@ -265,3 +296,86 @@ final _projectEntriesProvider =
   final repo = await ref.watch(ledgerRepoProvider.future);
   return repo.entriesForProject(key.projectId, from: key.from, to: key.to);
 });
+
+/// Holds the supplier + material breakdown lists alongside a name lookup
+/// so the breakdown card can render supplier ids as human labels. Wrapped
+/// in a single provider so the screen does one fetch, not three.
+class _BreakdownData {
+  final List<({String supplierId, double total})> supplierRows;
+  final List<({String materialType, double total})> materialRows;
+  final Map<String, String> supplierNames;
+  const _BreakdownData({
+    required this.supplierRows,
+    required this.materialRows,
+    required this.supplierNames,
+  });
+}
+
+final _projectBreakdownProvider =
+    FutureProvider.family<_BreakdownData, _FilterKey>((ref, key) async {
+  ref.watch(ledgerVersionProvider);
+  final ledger = await ref.watch(ledgerRepoProvider.future);
+  final entities = await ref.watch(entityRepoProvider.future);
+  final suppliers = await ref.watch(suppliersProvider.future);
+  final archived = await ref.watch(archivedSuppliersProvider.future);
+
+  final supplierRows = await ledger.projectSupplierBreakdown(
+    key.projectId,
+    from: key.from,
+    to: key.to,
+  );
+  final materialRows = await ledger.projectMaterialBreakdown(
+    key.projectId,
+    from: key.from,
+    to: key.to,
+  );
+
+  final names = <String, String>{
+    for (final Party s in [...suppliers, ...archived]) s.id: s.name,
+  };
+  // Cover the rare case where a supplier was hard-deleted (very unusual
+  // in this app) so we still surface SOMETHING readable instead of the
+  // raw uuid. Look up by id directly as a last resort.
+  for (final r in supplierRows) {
+    if (r.supplierId.isEmpty || names.containsKey(r.supplierId)) continue;
+    final s = await entities.supplier(r.supplierId);
+    if (s != null) names[r.supplierId] = s.name;
+  }
+
+  return _BreakdownData(
+    supplierRows: supplierRows,
+    materialRows: materialRows,
+    supplierNames: names,
+  );
+});
+
+/// Project-ledger-only breakdown card. Pulls the supplier + material
+/// rollups via [_projectBreakdownProvider] and hands them to the shared
+/// [ProjectBreakdownCard]. Renders nothing while loading so the page
+/// doesn't shift; renders the card empty-state when both rollups are
+/// empty (the card itself handles that).
+class _ProjectBreakdown extends ConsumerWidget {
+  const _ProjectBreakdown({
+    required this.projectId,
+    required this.from,
+    required this.to,
+  });
+  final String projectId;
+  final DateTime? from;
+  final DateTime? to;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final key = _FilterKey(projectId: projectId, from: from, to: to);
+    final async = ref.watch(_projectBreakdownProvider(key));
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (d) => ProjectBreakdownCard(
+        materialRows: d.materialRows,
+        supplierRows: d.supplierRows,
+        supplierNames: d.supplierNames,
+      ),
+    );
+  }
+}

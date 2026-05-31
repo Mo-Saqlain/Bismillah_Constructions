@@ -8,6 +8,7 @@ import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
+import '../common/trial_balance_card.dart';
 import '../../core/export/csv_export.dart';
 import '../../core/export/pdf_generator.dart';
 
@@ -176,6 +177,8 @@ class _BankLedgerScreenState extends ConsumerState<BankLedgerScreen> {
         data: (entries) {
           final rows = _toRows(entries);
           final total = rows.isEmpty ? 0.0 : rows.last.balance;
+          final totalDr = entries.fold<double>(0, (a, e) => a + e.debit);
+          final totalCr = entries.fold<double>(0, (a, e) => a + e.credit);
           return LedgerView(
             title: widget.bank.name,
             subtitle: '${widget.bank.accountNo == null ? '' : 'Acct ${widget.bank.accountNo} · '}'
@@ -187,13 +190,41 @@ class _BankLedgerScreenState extends ConsumerState<BankLedgerScreen> {
             debitHeader: 'Dr (in)',
             creditHeader: 'Cr (out)',
             emptyMessage: 'No transactions for this account in the period.',
-            headerBelowTitle: DateRangeBar(
-              from: _from,
-              to: _to,
-              onChanged: (f, t) => setState(() {
-                _from = f;
-                _to = t;
-              }),
+            headerBelowTitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DateRangeBar(
+                  from: _from,
+                  to: _to,
+                  onChanged: (f, t) => setState(() {
+                    _from = f;
+                    _to = t;
+                  }),
+                ),
+                const SizedBox(height: 12),
+                TrialBalanceCard(
+                  title: 'Trial balance',
+                  entryCount: entries.length,
+                  rows: [
+                    TrialBalanceRow(
+                      label: 'Money in (Dr)',
+                      value: totalDr,
+                    ),
+                    TrialBalanceRow(
+                      label: 'Money out (Cr)',
+                      value: totalCr,
+                    ),
+                    TrialBalanceRow(
+                      label: 'Net balance',
+                      value: total,
+                      bold: true,
+                      // Asset account — positive cash is good (green).
+                      colorize: total,
+                      helper: 'Dr − Cr (asset-account convention)',
+                    ),
+                  ],
+                ),
+              ],
             ),
           );
         },

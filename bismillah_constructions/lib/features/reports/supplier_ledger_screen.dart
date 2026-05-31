@@ -10,6 +10,7 @@ import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../common/date_range_bar.dart';
 import '../common/ledger_view.dart';
+import '../common/trial_balance_card.dart';
 import '../../core/export/csv_export.dart';
 import '../../core/export/pdf_generator.dart';
 
@@ -159,6 +160,8 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
           final ledgerRows = _toRows(_rows);
           final total =
               _rows.fold<double>(0, (a, r) => a + r.credit - r.debit);
+          final totalDr = _rows.fold<double>(0, (a, r) => a + r.debit);
+          final totalCr = _rows.fold<double>(0, (a, r) => a + r.credit);
 
           return LedgerView(
             title: supplier.name,
@@ -206,6 +209,30 @@ class _SupplierLedgerScreenState extends ConsumerState<SupplierLedgerScreen> {
                     _projectFilter = v;
                     _refilter();
                   },
+                ),
+                const SizedBox(height: 12),
+                TrialBalanceCard(
+                  title: 'Trial balance',
+                  entryCount: _rows.length,
+                  rows: [
+                    TrialBalanceRow(
+                      label: 'Settlements paid (Dr)',
+                      value: totalDr,
+                    ),
+                    TrialBalanceRow(
+                      label: 'Bills incurred (Cr)',
+                      value: totalCr,
+                    ),
+                    TrialBalanceRow(
+                      label: total >= 0 ? 'Outstanding payable' : 'Overpaid (asset)',
+                      value: total,
+                      bold: true,
+                      // Invert: positive arithmetic = we owe (bad → red);
+                      // negative = we overpaid (good → green).
+                      colorize: -total,
+                      helper: 'Cr − Dr (supplier-payable convention)',
+                    ),
+                  ],
                 ),
               ],
             ),
