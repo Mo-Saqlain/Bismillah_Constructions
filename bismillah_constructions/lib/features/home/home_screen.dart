@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../manage/manage_screen.dart';
 import '../reports/reports_screen.dart';
@@ -250,7 +251,7 @@ class _PillNavBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(38),
+            borderRadius: BorderRadius.circular(Radii.large),
             border: Border.all(color: scheme.outlineVariant),
             boxShadow: [
               BoxShadow(
@@ -291,8 +292,12 @@ class _PillDestination extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Inner destination radius sits between [Radii.small] and
+    // [Radii.medium] — slightly softer than a card so it still reads
+    // as a tap target inside the rounded tray, but not a stadium.
+    const innerRadius = 18.0;
     return InkWell(
-      borderRadius: BorderRadius.circular(28),
+      borderRadius: BorderRadius.circular(innerRadius),
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
@@ -303,7 +308,7 @@ class _PillDestination extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: selected ? scheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(innerRadius),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
