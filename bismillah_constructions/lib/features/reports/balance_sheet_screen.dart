@@ -7,6 +7,18 @@ import '../common/async_view.dart';
 import '../../core/export/csv_export.dart';
 import '../../core/export/pdf_generator.dart';
 
+/// Balance Sheet — a complete accrual position statement.
+///
+/// Beyond the cash/bank ledger balances it surfaces the off-ledger
+/// positions the business actually carries: money owed by under-funded
+/// projects and advances sitting with suppliers (assets), and customer
+/// advances (unearned receipts) plus the provision for over-budget
+/// projects (liabilities).
+///
+/// There is no contributed owner capital in this business, so the bottom
+/// line is **Net Worth** (= Assets − Liabilities) — profit retained from
+/// work done. Cumulative recognized profit from the P&L is shown as a
+/// memo cross-check rather than a forced "equity" plug.
 class BalanceSheetScreen extends ConsumerWidget {
   const BalanceSheetScreen({super.key});
 
@@ -19,11 +31,21 @@ class BalanceSheetScreen extends ConsumerWidget {
       body: AsyncView(
         value: summary,
         data: (s) {
-          final liabPlusEquity = s.liabilities + s.equity;
-          final balanced = (s.assets - liabPlusEquity).abs() < 0.01;
+          final assets = s.cash +
+              s.totalBanks +
+              s.counterReceivables +
+              s.projectReceivables +
+              s.supplierOverpayments;
+          final liabilities = s.payables +
+              s.counterPayables +
+              s.customerDeposits +
+              s.lossProvision;
+          final netWorth = assets - liabilities;
+
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              // ── Assets ───────────────────────────────────────────────
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -46,47 +68,72 @@ class BalanceSheetScreen extends ConsumerWidget {
                       ),
                       if (s.counterReceivables > 0)
                         _row('Counter Receivables', s.counterReceivables),
+                      if (s.projectReceivables > 0)
+                        _row('Project Receivables (under-funded)',
+                            s.projectReceivables),
+                      if (s.supplierOverpayments > 0)
+                        _row('Supplier Advances', s.supplierOverpayments),
                       const Divider(),
-                      _row('Total Assets', s.assets, bold: true),
+                      _row('Total Assets', assets, bold: true),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 8),
+              // ── Liabilities ──────────────────────────────────────────
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('Liabilities & Equity',
+                      Text('Liabilities',
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 6),
                       _row('Supplier Payables', s.payables),
                       if (s.counterPayables > 0)
                         _row('Counter Payables', s.counterPayables),
-                      _row("Owner's Equity (derived)", s.equity),
+                      if (s.customerDeposits > 0)
+                        _row('Customer Advances (unearned)',
+                            s.customerDeposits),
+                      if (s.lossProvision > 0)
+                        _row('Provision for Project Losses', s.lossProvision),
                       const Divider(),
-                      _row('Total Liabilities + Equity', liabPlusEquity,
-                          bold: true),
+                      _row('Total Liabilities', liabilities, bold: true),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              if (!balanced)
-                _StatusBanner(
-                  isDark: Theme.of(context).brightness == Brightness.dark,
-                  ok: false,
-                  message:
-                      'Assets do not equal Liabilities + Equity. Difference: ${fmtMoney(s.assets - liabPlusEquity)}',
-                )
-              else
-                _StatusBanner(
-                  isDark: Theme.of(context).brightness == Brightness.dark,
-                  ok: true,
-                  message: 'Books are balanced.',
+              const SizedBox(height: 8),
+              // ── Net Worth + cross-check ──────────────────────────────
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _row('Net Worth (retained in business)', netWorth,
+                          bold: true),
+                      const Divider(),
+                      _row('Accumulated profit to date (P&L)', s.netProfit),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This business holds no contributed owner capital — '
+                        'net worth is profit retained from completed and '
+                        'in-progress work. It can exceed accumulated profit '
+                        'while projects are in progress: the balance sheet '
+                        'shows the full receivable from an under-funded job, '
+                        'while the P&L defers recognition until cash and '
+                        'costs match (cost-recovery PoC). They converge as '
+                        'projects close. Counter receivables/payables and '
+                        'opening cash entered directly can widen the gap '
+                        'further.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
                 ),
+              ),
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -104,9 +151,13 @@ class BalanceSheetScreen extends ConsumerWidget {
                                 (b.name, s.bankBalances[b.id] ?? 0),
                             ],
                             counterReceivables: s.counterReceivables,
+                            projectReceivables: s.projectReceivables,
+                            supplierAdvances: s.supplierOverpayments,
                             payables: s.payables,
                             counterPayables: s.counterPayables,
-                            equity: s.equity,
+                            customerDeposits: s.customerDeposits,
+                            lossProvision: s.lossProvision,
+                            accumulatedProfit: s.netProfit,
                             generatedAt: DateTime.now(),
                           ),
                         );
@@ -130,17 +181,49 @@ class BalanceSheetScreen extends ConsumerWidget {
                                 (s.bankBalances[b.id] ?? 0).toStringAsFixed(2)
                               ],
                             if (s.counterReceivables > 0)
-                              ['Counter Receivables',
-                                  s.counterReceivables.toStringAsFixed(2)],
-                            ['Total Assets', s.assets.toStringAsFixed(2)],
-                            ['Supplier Payables',
-                                s.payables.toStringAsFixed(2)],
+                              [
+                                'Counter Receivables',
+                                s.counterReceivables.toStringAsFixed(2)
+                              ],
+                            if (s.projectReceivables > 0)
+                              [
+                                'Project Receivables (under-funded)',
+                                s.projectReceivables.toStringAsFixed(2)
+                              ],
+                            if (s.supplierOverpayments > 0)
+                              [
+                                'Supplier Advances',
+                                s.supplierOverpayments.toStringAsFixed(2)
+                              ],
+                            ['Total Assets', assets.toStringAsFixed(2)],
+                            [
+                              'Supplier Payables',
+                              s.payables.toStringAsFixed(2)
+                            ],
                             if (s.counterPayables > 0)
-                              ['Counter Payables',
-                                  s.counterPayables.toStringAsFixed(2)],
-                            ["Owner's Equity", s.equity.toStringAsFixed(2)],
-                            ['Total Liabilities + Equity',
-                                liabPlusEquity.toStringAsFixed(2)],
+                              [
+                                'Counter Payables',
+                                s.counterPayables.toStringAsFixed(2)
+                              ],
+                            if (s.customerDeposits > 0)
+                              [
+                                'Customer Advances (unearned)',
+                                s.customerDeposits.toStringAsFixed(2)
+                              ],
+                            if (s.lossProvision > 0)
+                              [
+                                'Provision for Project Losses',
+                                s.lossProvision.toStringAsFixed(2)
+                              ],
+                            ['Total Liabilities', liabilities.toStringAsFixed(2)],
+                            [
+                              'Net Worth (retained in business)',
+                              netWorth.toStringAsFixed(2)
+                            ],
+                            [
+                              'Accumulated profit to date (P&L)',
+                              s.netProfit.toStringAsFixed(2)
+                            ],
                           ],
                         );
                         await CsvExport.share(
@@ -166,60 +249,16 @@ class BalanceSheetScreen extends ConsumerWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label,
-                style: TextStyle(
-                    fontWeight:
-                        bold ? FontWeight.w700 : FontWeight.normal)),
+            Expanded(
+              child: Text(label,
+                  style: TextStyle(
+                      fontWeight:
+                          bold ? FontWeight.w700 : FontWeight.normal)),
+            ),
             Text(fmtMoney(v),
                 style: TextStyle(
-                    fontWeight:
-                        bold ? FontWeight.w700 : FontWeight.normal)),
+                    fontWeight: bold ? FontWeight.w700 : FontWeight.normal)),
           ],
         ),
       );
-}
-
-/// Banner that adapts to dark mode. The "ok" state used to be green; the app
-/// now uses blue everywhere so positive feedback inherits the primary palette
-/// instead. Negative state stays red (universal accounting convention).
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({
-    required this.ok,
-    required this.message,
-    required this.isDark,
-  });
-  final bool ok;
-  final String message;
-  final bool isDark;
-
-  @override
-  Widget build(BuildContext context) {
-    final bg = ok
-        ? (isDark ? Colors.blue.shade900 : Colors.blue.shade50)
-        : (isDark ? Colors.red.shade900 : Colors.red.shade50);
-    final fg = ok
-        ? (isDark ? Colors.blue.shade100 : Colors.blue.shade900)
-        : (isDark ? Colors.red.shade100 : Colors.red.shade900);
-    final border = ok
-        ? (isDark ? Colors.blue.shade400 : Colors.blue.shade300)
-        : (isDark ? Colors.red.shade400 : Colors.red.shade300);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: bg,
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(ok ? Icons.check_circle : Icons.warning, color: fg),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(message,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
 }

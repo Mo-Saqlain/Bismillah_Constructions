@@ -10,6 +10,35 @@ class MonthlyCashFlow {
   double get total => perAccount.values.fold(0, (a, b) => a + b);
 }
 
+/// One month of recognized P&L for the Monthly P&L Trend report.
+///
+/// Each month is the delta of two cumulative [LedgerRepository.incomeFigures]
+/// snapshots at the month-end boundaries — see [LedgerRepository.monthlyIncome]
+/// for why per-month windows don't work for PoC cost-recovery. The
+/// cumulative loss provision is excluded here: it is a forward-looking
+/// point-in-time figure, not a monthly flow, and would otherwise
+/// double-count if it shifted between months.
+class MonthlyIncome {
+  final DateTime month;
+
+  /// Recognized contract revenue + service fees earned in the month.
+  final double income;
+  final double materialCosts;
+  final double labourCosts;
+  final double personalDraw;
+
+  const MonthlyIncome({
+    required this.month,
+    required this.income,
+    required this.materialCosts,
+    required this.labourCosts,
+    required this.personalDraw,
+  });
+
+  double get costs => materialCosts + labourCosts + personalDraw;
+  double get netProfit => income - costs;
+}
+
 /// Result of [LedgerRepository.incomeFigures]. Single source of truth for
 /// every "what's our P&L?" surface (Income Statement, dashboard Net Profit).
 class IncomeFigures {

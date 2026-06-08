@@ -48,24 +48,45 @@ class BalanceSheetData {
   /// (name, balance) pairs for each user-defined bank/wallet.
   final List<(String, double)> bankRows;
   final double counterReceivables;
+  /// Money owed to us by under-funded projects (spent beyond received).
+  final double projectReceivables;
+  /// Net advances sitting with suppliers (we paid more than we were billed).
+  final double supplierAdvances;
   final double payables;
   final double counterPayables;
-  final double equity;
+  /// Project money received but not yet earned — a refundable advance.
+  final double customerDeposits;
+  /// Provision for anticipated losses on over-budget projects.
+  final double lossProvision;
+  /// Cumulative recognized net profit from the P&L — a memo cross-check.
+  /// This business holds no contributed owner capital, so net worth is
+  /// profit retained in the business.
+  final double accumulatedProfit;
   final DateTime generatedAt;
   BalanceSheetData({
     required this.cash,
     required this.bankRows,
     required this.counterReceivables,
+    required this.projectReceivables,
+    required this.supplierAdvances,
     required this.payables,
     required this.counterPayables,
-    required this.equity,
+    required this.customerDeposits,
+    required this.lossProvision,
+    required this.accumulatedProfit,
     required this.generatedAt,
   });
   double get totalBanks =>
       bankRows.fold<double>(0, (a, r) => a + r.$2);
-  double get assets => cash + totalBanks + counterReceivables;
-  double get liabPlusEquity => payables + counterPayables + equity;
-  bool get balanced => (assets - liabPlusEquity).abs() < 0.01;
+  double get assets =>
+      cash +
+      totalBanks +
+      counterReceivables +
+      projectReceivables +
+      supplierAdvances;
+  double get liabilities =>
+      payables + counterPayables + customerDeposits + lossProvision;
+  double get netWorth => assets - liabilities;
 }
 
 class SupplierLedgerData {
@@ -263,33 +284,43 @@ class PdfGenerator {
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
           _line('  Cash', d.cash),
           for (final r in d.bankRows) _line('  ${r.$1}', r.$2),
-          if (d.counterReceivables > 0)
+          if (d.counterReceivables != 0)
             _line('  Counter Receivables', d.counterReceivables),
+          if (d.projectReceivables != 0)
+            _line('  Project Receivables (under-funded)',
+                d.projectReceivables),
+          if (d.supplierAdvances != 0)
+            _line('  Supplier Advances', d.supplierAdvances),
           _line('Total Assets', d.assets, bold: true),
           pw.SizedBox(height: 12),
-          pw.Text('Liabilities & Equity',
+          pw.Text('Liabilities',
               style: pw.TextStyle(
                   fontSize: 14, fontWeight: pw.FontWeight.bold)),
           _line('  Supplier Payables', d.payables),
-          if (d.counterPayables > 0)
+          if (d.counterPayables != 0)
             _line('  Counter Payables', d.counterPayables),
-          _line("  Owner's Equity", d.equity),
-          _line('Total Liabilities + Equity', d.liabPlusEquity, bold: true),
+          if (d.customerDeposits != 0)
+            _line('  Customer Advances (unearned)', d.customerDeposits),
+          if (d.lossProvision != 0)
+            _line('  Provision for Project Losses', d.lossProvision),
+          _line('Total Liabilities', d.liabilities, bold: true),
           pw.SizedBox(height: 12),
-          if (!d.balanced)
-            pw.Container(
-              padding: const pw.EdgeInsets.all(8),
-              decoration: pw.BoxDecoration(
-                color: PdfColors.red50,
-                border: pw.Border.all(color: PdfColors.red),
-              ),
-              child: pw.Text(
-                'WARNING: Assets do not equal Liabilities + Equity. '
-                'Difference: ${fmtMoney(d.assets - d.liabPlusEquity)}',
-                style: pw.TextStyle(
-                    color: PdfColors.red, fontWeight: pw.FontWeight.bold),
-              ),
-            ),
+          pw.Divider(),
+          _line('Net Worth (retained in business)', d.netWorth, bold: true),
+          pw.SizedBox(height: 14),
+          pw.Text('Memo',
+              style: pw.TextStyle(
+                  fontSize: 11, fontWeight: pw.FontWeight.bold)),
+          _line('  Accumulated profit to date (P&L)', d.accumulatedProfit),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            'This business holds no contributed owner capital — net worth is '
+            'profit retained from completed and in-progress work. Net worth '
+            'and accumulated profit can differ by externally-tracked counter '
+            'receivables/payables and any opening cash entered directly.',
+            style:
+                const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+          ),
         ],
       ),
     ));

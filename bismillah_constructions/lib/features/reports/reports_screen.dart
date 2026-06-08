@@ -6,6 +6,7 @@ import 'balance_sheet_screen.dart';
 import 'bank_ledger_screen.dart';
 import 'cash_flow_screen.dart';
 import 'income_statement_screen.dart';
+import 'income_trend_screen.dart';
 import 'material_price_trend_screen.dart';
 import 'project_bva_picker_screen.dart';
 import 'project_ledger_screen.dart';
@@ -92,7 +93,7 @@ class ReportsScreen extends StatelessWidget {
             icon: Icons.account_balance,
             color: Colors.blue,
             title: 'Balance Sheet',
-            subtitle: 'Assets vs Liabilities + Equity',
+            subtitle: 'Assets, liabilities and net worth retained in the business',
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -108,6 +109,17 @@ class ReportsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const CashFlowScreen())),
+          ),
+          _ReportTile(
+            icon: Icons.timeline,
+            color: Colors.lightGreen,
+            title: 'Monthly P&L Trend',
+            subtitle:
+                'Recognized income, costs and net profit per month over the last 12 months',
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const IncomeTrendScreen())),
           ),
           _SectionTitle('Aging'),
           _ReportTile(

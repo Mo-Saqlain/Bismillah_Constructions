@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 15);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 16);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 15,
+        version: 16,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -61,18 +61,6 @@ class LocalDb {
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE customers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        phone TEXT,
-        ntn_cnic TEXT,
-        address TEXT,
-        credit_limit REAL,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
     await db.execute('''
       CREATE TABLE suppliers (
         id TEXT PRIMARY KEY,
@@ -117,8 +105,7 @@ class LocalDb {
         name TEXT NOT NULL,
         model TEXT NOT NULL,
         status TEXT NOT NULL,
-        customer_id TEXT,                      -- legacy, kept for migration
-        client_name TEXT,                      -- v5: free-text client (replaces customer fk)
+        client_name TEXT,                      -- free-text client; no Customer entity exists
         site_address TEXT,
         budget REAL,
         project_manager TEXT,
@@ -167,7 +154,6 @@ class LocalDb {
         account_id TEXT NOT NULL,
         project_id TEXT REFERENCES projects(id),
         supplier_id TEXT REFERENCES suppliers(id),
-        customer_id TEXT,
         debit REAL NOT NULL DEFAULT 0,
         credit REAL NOT NULL DEFAULT 0,
         description TEXT,
@@ -238,9 +224,6 @@ class LocalDb {
     );
     await db.execute(
       'CREATE INDEX idx_je_supplier ON journal_entries(supplier_id)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_je_customer ON journal_entries(customer_id)',
     );
     await db.execute('CREATE INDEX idx_je_synced ON journal_entries(synced)');
     await db.execute(
@@ -766,6 +749,32 @@ class LocalDb {
           'CREATE INDEX IF NOT EXISTS idx_je_deleted ON journal_entries(is_deleted)');
       await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_cl_entity ON change_log(entity_type, entity_id)');
+    }
+
+    if (oldVersion < 16) {
+      // v16: remove the customer entity entirely. The app is project-centric —
+      // the client is free-text `projects.client_name`; there is no Customer /
+      // Client table and no `customer_id` foreign key. Drop the three dead
+      // remnants left by older versions.
+      //
+      // ALTER TABLE ... DROP COLUMN needs SQLite >= 3.35 (2021). It's wrapped
+      // in try/catch so older engines simply keep the (now always-null,
+      // never-read) columns — the model and repository no longer reference
+      // them either way, so a leftover column is inert.
+      try {
+        await db.execute('DROP INDEX IF EXISTS idx_je_customer');
+      } catch (_) {/* index may not exist */}
+      try {
+        await db
+            .execute('ALTER TABLE journal_entries DROP COLUMN customer_id');
+      } catch (_) {/* SQLite < 3.35: leave the dead column in place */}
+      try {
+        await db.execute('ALTER TABLE projects DROP COLUMN customer_id');
+      } catch (_) {/* SQLite < 3.35: leave the dead column in place */}
+      // The `customers` table was created by very old installs but never
+      // written to once free-text `client_name` replaced it (v5). No FK
+      // references it, so it is safe to drop outright.
+      await db.execute('DROP TABLE IF EXISTS customers');
     }
   }
 

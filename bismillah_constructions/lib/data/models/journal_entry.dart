@@ -8,7 +8,6 @@ class JournalEntry {
   final String accountId;
   final String? projectId;
   final String? supplierId;
-  final String? customerId;
   final double debit;
   final double credit;
   final String? description;
@@ -27,7 +26,6 @@ class JournalEntry {
     required this.accountId,
     this.projectId,
     this.supplierId,
-    this.customerId,
     required this.debit,
     required this.credit,
     this.description,
@@ -45,7 +43,6 @@ class JournalEntry {
         'account_id': accountId,
         'project_id': projectId,
         'supplier_id': supplierId,
-        'customer_id': customerId,
         'debit': debit,
         'credit': credit,
         'description': description,
@@ -70,7 +67,6 @@ class JournalEntry {
         accountId: m['account_id'] as String,
         projectId: m['project_id'] as String?,
         supplierId: m['supplier_id'] as String?,
-        customerId: m['customer_id'] as String?,
         debit: (m['debit'] as num).toDouble(),
         credit: (m['credit'] as num).toDouble(),
         description: m['description'] as String?,

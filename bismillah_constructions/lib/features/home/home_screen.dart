@@ -146,30 +146,33 @@ class _HomeScreenState extends State<HomeScreen> {
         _handleBack();
       },
       child: Scaffold(
+        // Let the PageView paint behind the floating pill bar so it reads as
+        // a detached capsule rather than a docked bar.
+        extendBody: true,
         body: PageView(
           controller: _pageController,
           onPageChanged: _onPageChanged,
           children: _tabs.map((w) => _KeepAlivePage(child: w)).toList(),
         ),
-        bottomNavigationBar: NavigationBar(
+        bottomNavigationBar: _PillNavBar(
           selectedIndex: _index,
-          onDestinationSelected: _goToTab,
-          destinations: const [
-            NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
+          onSelected: _goToTab,
+          items: const [
+            _PillItem(
+                icon: Icons.dashboard_outlined,
+                selectedIcon: Icons.dashboard,
                 label: 'Home'),
-            NavigationDestination(
-                icon: Icon(Icons.tune_outlined),
-                selectedIcon: Icon(Icons.tune),
+            _PillItem(
+                icon: Icons.tune_outlined,
+                selectedIcon: Icons.tune,
                 label: 'Manage'),
-            NavigationDestination(
-                icon: Icon(Icons.assessment_outlined),
-                selectedIcon: Icon(Icons.assessment),
+            _PillItem(
+                icon: Icons.assessment_outlined,
+                selectedIcon: Icons.assessment,
                 label: 'Reports'),
-            NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
+            _PillItem(
+                icon: Icons.settings_outlined,
+                selectedIcon: Icons.settings,
                 label: 'Settings'),
           ],
         ),
@@ -198,5 +201,128 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   Widget build(BuildContext context) {
     super.build(context);
     return widget.child;
+  }
+}
+
+/// Data for a single destination in [_PillNavBar].
+class _PillItem {
+  const _PillItem({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+  });
+
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+}
+
+/// A floating, pill-shaped bottom navigation bar.
+///
+/// Renders a detached stadium-shaped capsule near the bottom edge. The
+/// active destination expands into its own filled pill that reveals its
+/// label; inactive destinations collapse to an icon only. Keeps the same
+/// [selectedIndex] / onSelected contract as the Material [NavigationBar] it
+/// replaced, so [HomeScreen]'s tab logic is unchanged.
+class _PillNavBar extends StatelessWidget {
+  const _PillNavBar({
+    required this.selectedIndex,
+    required this.onSelected,
+    required this.items,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final List<_PillItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(color: scheme.outlineVariant),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              for (var i = 0; i < items.length; i++)
+                _PillDestination(
+                  item: items[i],
+                  selected: i == selectedIndex,
+                  onTap: () => onSelected(i),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PillDestination extends StatelessWidget {
+  const _PillDestination({
+    required this.item,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _PillItem item;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(24),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.symmetric(
+          horizontal: selected ? 18 : 14,
+          vertical: 10,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? scheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected ? item.selectedIcon : item.icon,
+              size: 22,
+              color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
+            ),
+            if (selected) ...[
+              const SizedBox(width: 8),
+              Text(
+                item.label,
+                style: TextStyle(
+                  color: scheme.onPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

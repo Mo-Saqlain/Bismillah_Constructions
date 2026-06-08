@@ -79,7 +79,6 @@ class LedgerRepository {
     required double amount,
     String? projectId,
     String? supplierId,
-    String? customerId,
     String? description,
   }) async {
     if (amount <= 0) {
@@ -97,7 +96,6 @@ class LedgerRepository {
           accountId: debitAccount.id,
           projectId: projectId,
           supplierId: supplierId,
-          customerId: customerId,
           debit: amount,
           credit: 0,
           description: description,
@@ -112,7 +110,6 @@ class LedgerRepository {
           accountId: creditAccount.id,
           projectId: projectId,
           supplierId: supplierId,
-          customerId: customerId,
           debit: 0,
           credit: amount,
           description: description,
@@ -433,7 +430,6 @@ class LedgerRepository {
             accountId: debitRow.accountId,
             projectId: debitRow.projectId,
             supplierId: debitRow.supplierId,
-            customerId: debitRow.customerId,
             debit: 0,
             credit: amount,
             description: desc,
@@ -447,7 +443,6 @@ class LedgerRepository {
             accountId: creditRow.accountId,
             projectId: creditRow.projectId,
             supplierId: creditRow.supplierId,
-            customerId: creditRow.customerId,
             debit: amount,
             credit: 0,
             description: desc,
@@ -626,17 +621,6 @@ class LedgerRepository {
     final rows = await _db.query('journal_entries',
         where: where.toString(),
         whereArgs: args,
-        orderBy: 'created_at ASC');
-    return rows.map(JournalEntry.fromMap).toList();
-  }
-
-  Future<List<JournalEntry>> entriesForCustomer(String customerId,
-      {bool includeDeleted = false}) async {
-    final where = StringBuffer('customer_id = ?');
-    if (!includeDeleted) where.write(' AND is_deleted = 0');
-    final rows = await _db.query('journal_entries',
-        where: where.toString(),
-        whereArgs: [customerId],
         orderBy: 'created_at ASC');
     return rows.map(JournalEntry.fromMap).toList();
   }
@@ -904,12 +888,14 @@ class LedgerRepository {
     DateTime? from,
     DateTime? to,
     String? projectId,
+    DateTime? closeAsOf,
   }) async {
     // ── Load projects in scope ────────────────────────────────────────────
     final projWhere = projectId != null ? 'WHERE id = ?' : '';
     final projArgs = projectId != null ? <Object>[projectId] : <Object>[];
     final projRows = await _db.rawQuery(
-      'SELECT id, name, model, budget, is_archived FROM projects $projWhere',
+      'SELECT id, name, model, budget, is_archived, archived_at '
+      'FROM projects $projWhere',
       projArgs,
     );
 
@@ -926,7 +912,17 @@ class LedgerRepository {
       final pname = (r['name'] as String?) ?? '';
       final pmodel = (r['model'] as String?) ?? '';
       final budget = (r['budget'] as num?)?.toDouble() ?? 0;
-      final closed = ((r['is_archived'] as int?) ?? 0) == 1;
+      // Time-aware close check: when `closeAsOf` is supplied (used by
+      // Monthly P&L Trend cumulative snapshots), treat the project as
+      // closed only if it was archived on or before that moment. Without
+      // it, fall back to the live `is_archived` flag — which is what
+      // every other caller wants.
+      final archivedAt = (r['archived_at'] as String?) != null
+          ? DateTime.parse(r['archived_at'] as String)
+          : null;
+      final closed = closeAsOf != null
+          ? (archivedAt != null && !archivedAt.isAfter(closeAsOf))
+          : ((r['is_archived'] as int?) ?? 0) == 1;
 
       final received = await creditBalance(Accounts.projectRevenue.id,
           projectId: pid, from: from, to: to);
@@ -1280,8 +1276,10 @@ class LedgerRepository {
       args.add(from.toUtc().toIso8601String());
     }
     if (to != null) {
-      where.write(' AND created_at <= ?');
-      args.add(to.toUtc().toIso8601String());
+      // Inclusive upper bound — bump to next-day midnight to match the
+      // boundary handling everywhere else in this repo.
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT COALESCE(supplier_id, \'\') AS sid, '
@@ -1318,8 +1316,11 @@ class LedgerRepository {
       args.add(from.toUtc().toIso8601String());
     }
     if (to != null) {
-      where.write(' AND created_at <= ?');
-      args.add(to.toUtc().toIso8601String());
+      // Inclusive upper bound — matches accountBalance / sumDebits /
+      // sumCredits boundary handling so the date-windowed breakdown
+      // agrees with the trial-balance header above it.
+      where.write(' AND created_at < ?');
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT material_type AS mat, '
@@ -1496,15 +1497,15 @@ class LedgerRepository {
 
   // -------------------- Aging Analysis --------------------
 
-  /// Aging buckets across 0-30 / 31-60 / 61-90 / 90+ days for an account that
-  /// represents an outstanding balance (Client Receivables, Supplier Payables).
+  /// Aging buckets across 0-30 / 31-60 / 61-90 / 90+ days for the Supplier
+  /// Payables account — outstanding amounts we owe each supplier, FIFO-matched
+  /// against payments so the bucket reflects the oldest unmatched bill's age.
   ///
-  /// We bucket the *outstanding* portion per party using FIFO matching against
-  /// payments: the oldest open invoice's age determines the bucket. This keeps
-  /// the calculation accurate without invoice-level invoicing tables.
+  /// Since the Customer entity was removed there is no receivables-by-customer
+  /// aging; project receivables (under-funded projects) live in their own
+  /// FIFO aggregator at [agingProjectReceivables].
   Future<AgingReport> aging({
     required String partyAccountId,
-    required bool isReceivable,
     DateTime? asOf,
   }) async {
     final now = (asOf ?? DateTime.now()).toUtc();
@@ -1514,12 +1515,11 @@ class LedgerRepository {
       whereArgs: [partyAccountId],
       orderBy: 'created_at ASC',
     );
-    // For receivables: debits = invoice raised, credits = payment received.
-    // For payables:    credits = bill incurred, debits = payment made.
+    // Payables: credits = bill incurred, debits = payment made.
     final byParty = <String, List<JournalEntry>>{};
     for (final row in rows) {
       final je = JournalEntry.fromMap(row);
-      final partyId = isReceivable ? je.customerId : je.supplierId;
+      final partyId = je.supplierId;
       if (partyId == null) continue;
       byParty.putIfAbsent(partyId, () => []).add(je);
     }
@@ -1530,9 +1530,7 @@ class LedgerRepository {
       // payment consumes from the head.
       final open = <_OpenInvoice>[];
       for (final e in entries) {
-        final amt = isReceivable
-            ? (e.debit - e.credit)
-            : (e.credit - e.debit);
+        final amt = e.credit - e.debit;
         if (amt > 0) {
           open.add(_OpenInvoice(date: e.createdAt, remaining: amt));
         } else if (amt < 0) {
@@ -1835,6 +1833,64 @@ class LedgerRepository {
     return out;
   }
 
+  /// Per-month recognized P&L for the last [monthsBack] months, oldest →
+  /// newest. Recognition basis matches the Income Statement (cost-recovery
+  /// PoC for With-Material, service fees for Labour-Rate).
+  ///
+  /// Implementation note: each month's bucket is the **delta** of two
+  /// cumulative [incomeFigures] snapshots taken at the month-end
+  /// boundaries. A naive per-month window doesn't work for PoC: the
+  /// in-progress `min(received, costs)` rule only converges when applied
+  /// to lifetime cumulative totals, so window-only buckets would
+  /// systematically under-recognize revenue mid-project (most months show
+  /// only costs, then a one-time revenue spike at close). The cumulative
+  /// snapshot also passes `closeAsOf = monthEnd` so projects archived
+  /// later don't retroactively rewrite earlier months as "closed".
+  Future<List<MonthlyIncome>> monthlyIncome({int monthsBack = 12}) async {
+    final now = DateTime.now().toUtc();
+    final monthStarts = <DateTime>[];
+    final snapshots = <IncomeFigures>[];
+    for (var i = monthsBack - 1; i >= 0; i--) {
+      final mStart = DateTime.utc(now.year, now.month - i, 1);
+      // Last calendar day of the month — accountBalance treats `to` as an
+      // inclusive day boundary, so this captures the whole month.
+      final mEnd = DateTime.utc(mStart.year, mStart.month + 1, 1)
+          .subtract(const Duration(days: 1));
+      monthStarts.add(mStart);
+      snapshots.add(await incomeFigures(to: mEnd, closeAsOf: mEnd));
+    }
+    final out = <MonthlyIncome>[];
+    double prevIncome = 0, prevMat = 0, prevLab = 0, prevDraw = 0;
+    // Baseline: cumulative-as-of-day-before-the-window-start. Without it
+    // the oldest month would absorb every recognition event from the
+    // project's whole prior history, making it spike artificially.
+    if (monthStarts.isNotEmpty) {
+      final baselineEnd =
+          monthStarts.first.subtract(const Duration(days: 1));
+      final baseline =
+          await incomeFigures(to: baselineEnd, closeAsOf: baselineEnd);
+      prevIncome = baseline.totalIncome;
+      prevMat = baseline.matCosts;
+      prevLab = baseline.labCosts;
+      prevDraw = baseline.personalDraw;
+    }
+    for (var i = 0; i < snapshots.length; i++) {
+      final f = snapshots[i];
+      out.add(MonthlyIncome(
+        month: monthStarts[i],
+        income: f.totalIncome - prevIncome,
+        materialCosts: f.matCosts - prevMat,
+        labourCosts: f.labCosts - prevLab,
+        personalDraw: f.personalDraw - prevDraw,
+      ));
+      prevIncome = f.totalIncome;
+      prevMat = f.matCosts;
+      prevLab = f.labCosts;
+      prevDraw = f.personalDraw;
+    }
+    return out;
+  }
+
   // -------------------- Wage Register --------------------
 
   /// Returns LABOUR_COSTS debits grouped by supplier (worker), with totals
@@ -1849,8 +1905,10 @@ class LedgerRepository {
       args.add(from.toUtc().toIso8601String());
     }
     if (to != null) {
+      // Inclusive upper bound — bump to next-day midnight to match the
+      // boundary handling everywhere else in this repo.
       where.write(' AND created_at < ?');
-      args.add(to.toUtc().toIso8601String());
+      args.add(to.add(const Duration(days: 1)).toUtc().toIso8601String());
     }
     final rows = await _db.rawQuery(
       'SELECT supplier_id, COUNT(*) AS payments, SUM(debit) AS total, '

@@ -111,7 +111,6 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   account_id      text NOT NULL,
   project_id      text,
   supplier_id     text,
-  customer_id     text,
   debit           numeric NOT NULL DEFAULT 0,
   credit          numeric NOT NULL DEFAULT 0,
   description     text,

@@ -212,7 +212,6 @@ final _payablesAgingProvider =
   final entityRepo = await ref.watch(entityRepoProvider.future);
   final report = await ledger.aging(
     partyAccountId: Accounts.supplierPayables.id,
-    isReceivable: false,
   );
   final parties = await entityRepo.suppliers();
   return _AgingBundle(report, parties);

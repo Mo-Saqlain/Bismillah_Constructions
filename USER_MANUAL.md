@@ -21,6 +21,8 @@ into reports you can use to know:
 
 It's offline-first: your data lives on the phone and is automatically
 backed up to a folder that survives uninstall on most Android devices.
+Optional Supabase cloud sync (see §12) lets you use the same data on
+multiple devices.
 
 ---
 
@@ -92,21 +94,21 @@ saved `.db` file from Downloads / WhatsApp / a USB drive.
 
 ### 4.1 Bottom tabs
 
-Four tabs, in this order:
+Four tabs along the **pill nav bar** at the bottom — the active tab
+expands to a coloured pill with both icon and label; the rest collapse
+to icon-only.
 
-1. **Home** — the dashboard. Treasury, recent activity, daily spend,
-   loss warnings.
+1. **Home** — the dashboard. Treasury, follow-ups, daily spend, loss
+   warnings, recent activity.
 2. **Manage** — entities: Projects, Suppliers, Wallets & Banks,
    Material Types, Labour Types.
 3. **Reports** — every financial statement and chart.
-4. **Settings** — appearance, backup, audit log, types catalogs,
-   recent errors.
+4. **Settings** — appearance, backup, cloud sync, audit log, types
+   catalogs, recent errors.
 
 ### 4.2 Switching tabs
 
-- **Tap** a tab icon at the bottom — smooth slide animation, even
-  across non-adjacent tabs (Home → Settings doesn't flash through
-  Manage and Reports).
+- **Tap** a tab icon at the bottom — smooth pill expansion animation.
 - **Swipe left/right** anywhere on the page — moves to the adjacent
   tab. Swiping inside a sub-screen (e.g. inside Income Statement) is
   inert — only the top-level tabs are swipeable.
@@ -285,6 +287,38 @@ What happens depends on the numbers:
 Mistakes happen. **Project tile → Unarchive** moves a closed project
 back to active. All historical data is preserved.
 
+### 6.6 Site Snapshot
+
+Each project's detail screen has a **Site Snapshot** tab — a one-page
+summary tailored to a contractor on a noisy site:
+
+- Budget / spent / received / projected remaining cost / projected
+  cash gap / projected final profit.
+- An owner-entered **completion%** slider drives the projection — set
+  it as you visit the site.
+- A **risk band** (green / amber / red) reflects how the projected
+  final cost compares to budget.
+
+### 6.7 Closure Assistant
+
+Before you archive, the **Closure Assistant** walks you through
+what's still wrong: outstanding supplier payables, budget mismatch,
+service-fee reclassification not yet booked. It surfaces the same
+gates the archive button enforces, but as a checklist so you can
+sort issues before pressing Archive.
+
+### 6.8 Notes
+
+The detail screen for any project or supplier carries a **Notes**
+panel — free-text, pinnable. Use it for site instructions, customer
+preferences, payment reminders the ledger can't capture.
+
+### 6.9 Follow-Ups
+
+**Manage → Follow-Ups** (and the dashboard's Overdue Follow-Ups
+tile) tracks recovery / billing reminders: title, expected date,
+priority, status, optional amount estimate. Mark resolved when done.
+
 ---
 
 ## 7. The dashboard explained
@@ -348,9 +382,15 @@ not diluted to near-zero by 29 idle days.
 A bar chart showing material + labour costs for the last 7 days. The
 peak day is highlighted in the tertiary accent color.
 
-### 7.8 Recent Activity
+### 7.8 Overdue Follow-Ups (only when applicable)
 
-The last 8 transactions, grouped by date. The "See all" button opens
+A small tile listing any recovery / billing follow-ups whose
+expected date has passed without being marked resolved. Tap to jump
+into the follow-ups list.
+
+### 7.9 Recent Activity
+
+The latest transactions, grouped by date. The "See all" button opens
 the full transaction history with date headers.
 
 ---
@@ -366,10 +406,21 @@ The Reports tab groups all financial statements into four sections.
   revenue until matching costs are incurred. Includes a Customer
   Deposits informational section, a Loss Provision line when any
   project is over budget, and an at-risk banner. CSV + PDF export.
-- **Balance Sheet** — Assets vs Liabilities + Equity, with a
-  balanced/unbalanced indicator.
+- **Balance Sheet** — **Net Worth model**: Assets − Liabilities. No
+  equity plug. Assets include cash, banks, counter receivables,
+  project receivables (under-funded projects) and supplier advances.
+  Liabilities include supplier payables, counter payables, customer
+  deposits and the loss provision. Cumulative recognized profit
+  appears below as a cross-check memo — the two can differ while
+  projects are still in progress and converge as they close. CSV +
+  PDF export.
 - **Cash Flow Statement** — Operating, financing and net cash
   movement across all projects. 12-month bar chart.
+- **Monthly P&L Trend** — recognized income, costs and net profit
+  per month over the last 12 months. Same recognition rules as the
+  Income Statement (PoC cost-recovery for With-Material, service
+  fees for Labour-Rate). Line chart + monthly breakdown table; CSV
+  export.
 
 ### 8.2 Ledgers
 
@@ -380,7 +431,12 @@ The Reports tab groups all financial statements into four sections.
 - **Bank / Wallet Ledger** — every transaction through a specific
   bank or wallet account.
 - **Project Ledger** — every transaction for a single project; running
-  balance.
+  balance. Includes a **trial-balance header** (opening / debits /
+  credits / closing) plus per-supplier and per-material spend
+  breakdowns.
+
+Every ledger screen carries the same trial-balance header above the
+entries — same numbers you'd compute by hand, computed for you.
 
 ### 8.3 Aging
 
@@ -515,6 +571,55 @@ folder with size and modified date. Tap a file to:
 
 ---
 
+## 9A. Cloud sync (optional)
+
+If your APK was built with Supabase credentials, the **Cloud Sync**
+section in Settings lights up. When it's not configured, the section
+explains that cloud sync is opt-in and how to enable it; nothing
+leaves the device until you do.
+
+### 9A.1 What gets synced
+
+Every domain row — projects, suppliers, banks, journal entries,
+material inventory, material/labour types, notes, follow-ups. Cash
+balances and reports are not synced directly; they're recomputed on
+each device from the synced rows.
+
+### 9A.2 How it works
+
+- **Push** — every time you save a transaction the app uploads it to
+  Supabase within a few seconds.
+- **Pull** — on app start (and from the Settings screen) the app
+  pulls anything new from the server since the last sync.
+- **No overwrites** — if a row already exists on this device, the
+  server's version is skipped. The cloud is a mirror of every
+  device's writes; your local data is never destroyed.
+- **Tenant id** — your install gets a unique tenant id on first
+  sync. Bringing a second device into the same tenant (by importing
+  a backup with that tenant id) is how two devices share one set of
+  books.
+
+### 9A.3 Multi-device setup
+
+1. **Phone A** — install the APK, use the app for a few days, let
+   sync push everything up.
+2. **Settings → Share latest backup** on phone A → send the `.db`
+   file to phone B.
+3. **Phone B** — install the APK, then **Settings → Import backup**
+   → pick the file. This carries the tenant id over.
+4. From now on both phones push to the same cloud table and pull each
+   other's changes.
+
+### 9A.4 Force pull / status
+
+**Settings → Cloud Sync**:
+
+- Connection status (configured / not configured / last error).
+- Last successful sync timestamp.
+- **Pull now** button — force-fetch every table from the server.
+
+---
+
 ## 10. Settings
 
 ### 10.1 Appearance
@@ -532,7 +637,13 @@ Positive financial values are emerald, negative are rose.
 Run backup now, view history, share, import, undo, test folder
 permissions, copy folder path. All explained in §9.
 
-### 10.3 Audit
+### 10.3 Cloud Sync
+
+Connection status and last-sync timestamp; force-pull from server.
+Only visible when the APK was built with Supabase credentials. See
+§9A.
+
+### 10.4 Audit
 
 - **Change Log** — every soft-delete, archive, and edit recorded
   with timestamps, original/new values, the user note, and the
@@ -544,7 +655,7 @@ permissions, copy folder path. All explained in §9.
   thing to your clipboard for forwarding via WhatsApp. Cleared on
   cold start (in-memory only).
 
-### 10.4 Catalogs
+### 10.5 Catalogs
 
 - **Material Types** — add / edit / delete categories that appear in
   the Material Buy form (Brick, Cement, Sand, custom). Procurement
@@ -683,9 +794,13 @@ no custom shortcuts at this stage.
 ## 14. Privacy
 
 - All data is stored locally on the device.
-- Backups are written to user-visible storage on the same device.
-- No data is sent off-device unless you explicitly use the Share
-  Backup feature (WhatsApp, Gmail, Drive).
+- Local backups are written to user-visible storage on the same
+  device.
+- Cloud sync (see §9A) is **opt-in** — only active when the APK was
+  built with Supabase credentials. Without those, the app stays
+  fully offline and no data leaves the device.
+- The Share Backup feature is also opt-in: data only leaves the
+  device when you explicitly use it.
 - No analytics, no telemetry, no crash reporting service.
 
 ---

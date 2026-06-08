@@ -323,7 +323,6 @@ void main() {
 
     final report = await _ledgerRepo.aging(
         partyAccountId: Accounts.supplierPayables.id,
-        isReceivable: false,
         asOf: now);
 
     expect(report.total0_30, 100);

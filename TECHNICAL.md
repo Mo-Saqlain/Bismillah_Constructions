@@ -19,8 +19,12 @@ app. For end-user help, see [USER_MANUAL.md](USER_MANUAL.md).
 | IDs                  | `uuid` v4                                           |
 | Collections          | `collection` (firstWhereOrNull, etc.)               |
 | Tests                | `flutter_test` + `sqflite_common_ffi` in-memory DB  |
+| Cloud sync (opt-in)  | `supabase_flutter` 2.x (PostgREST + RLS)            |
 
-No cloud SDK, no auth, no analytics — fully offline-first.
+Fully offline-first; cloud sync is opt-in and only activates when
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` are supplied at build time. No
+analytics, no auth flows — a single shared tenant id underlies the
+multi-device model.
 
 ---
 
@@ -93,18 +97,20 @@ bismillah_constructions/
 │   │       └── pdf_generator.dart             # PDF report builder
 │   ├── data/
 │   │   ├── db/
-│   │   │   └── local_db.dart                  # sqflite open + schema v11 + migrations
+│   │   │   └── local_db.dart                  # sqflite open + schema v16 + migrations
 │   │   ├── models/                            # Plain Dart structs + toMap/fromMap
 │   │   ├── repositories/
 │   │   │   ├── ledger_repository.dart         # journal_entries writes + reads + reports
 │   │   │   ├── ledger_repository_models.dart  # part of — result classes
-│   │   │   └── entity_repository.dart         # projects / parties / banks / settings
+│   │   │   ├── entity_repository.dart         # projects / parties / banks / settings
+│   │   │   ├── notes_repository.dart          # operational notes (v14)
+│   │   │   └── followups_repository.dart      # recovery follow-ups (v14)
 │   │   ├── services/
 │   │   │   └── backup_service.dart            # local file backup, atomic copy
 │   │   └── sync/
-│   │       └── sync_service.dart              # commit-listener wiring
+│   │       └── sync_service.dart              # Supabase push + INSERT-only pull
 │   ├── providers/                             # split barrel — providers.dart re-exports
-│   │   ├── providers.dart                     # barrel: re-exports the 7 below
+│   │   ├── providers.dart                     # barrel
 │   │   ├── db_providers.dart                  # db, repos, ledgerVersion, bumpLedger
 │   │   ├── sync_providers.dart                # sync, backup, boot hooks
 │   │   ├── theme_provider.dart                # ThemeModeNotifier
@@ -113,32 +119,34 @@ bismillah_constructions/
 │   │   ├── account_summary.dart               # AccountSummary class + provider
 │   │   └── cash_runway.dart                   # CashRunway class + provider
 │   └── features/
-│       ├── home/                              # Bottom-nav shell + back stack
+│       ├── home/                              # Pill-nav shell + back stack
 │       ├── dashboard/                         # Treasury, runway, daily spend, at-risk
 │       ├── manage/                            # Projects/Suppliers/Banks tile, types screens
 │       ├── transactions/                      # Picker, form, history (date-grouped)
-│       ├── projects/                          # List, reconciliation/archive flow
-│       ├── parties/                           # Suppliers, banks/wallets
+│       ├── projects/                          # List, reconciliation/archive, site snapshot
+│       ├── notes/                             # Project + supplier notes panel (v14)
+│       ├── followups/                         # Recovery follow-ups (v14)
 │       ├── reports/                           # All reports + charts
 │       ├── common/                            # async_view, date_range_bar, ledger_view, restore_gateway
-│       └── settings/                          # Theme, backup, audit, errors, types
+│       └── settings/                          # Theme, backup, sync, audit, errors, types
 └── test/
-    ├── invariants_test.dart                   # core engine invariants (13)
-    ├── business_logic_test.dart               # PoC, labour-payment, archive gate (31)
-    ├── backup_blackbox_test.dart              # backup/restore/persistence (19)
-    ├── user_journeys_blackbox_test.dart       # end-to-end flows (10)
-    └── widget_test.dart                       # constants/enums (2)
+    ├── invariants_test.dart                   # engine invariants
+    ├── business_logic_test.dart               # PoC, labour-payment, archive gate
+    ├── backup_blackbox_test.dart              # backup/restore/persistence
+    ├── project_breakdown_test.dart            # per-supplier + per-material roll-ups
+    ├── user_journeys_blackbox_test.dart       # end-to-end flows
+    └── widget_test.dart                       # constants/enums
 ```
 
-Total LOC across `lib/`: ~16,800. Total automated tests: **75**.
+Total automated tests: **106**, all passing under `flutter test`.
 
 ---
 
 ## 4. Data model
 
-The local SQLite schema is at **version 11**. Migrations are forward-only
-and additive. See section [12](#12-schema-migration-history) for the full
-migration history.
+The local SQLite schema is at **version 16**. Migrations are forward-only
+and additive (with one drop-column in v16). See section
+[12](#12-schema-migration-history) for the full migration history.
 
 ### 4.1 `journal_entries` — the ledger
 
@@ -149,7 +157,6 @@ migration history.
 | account_id      | TEXT      | matches an `Account.id` from the Chart of Accounts       |
 | project_id      | TEXT?     | FK → projects(id), nullable                              |
 | supplier_id     | TEXT?     | FK → suppliers(id), nullable                             |
-| customer_id     | TEXT?     | nullable (legacy field, post-customer-removal)           |
 | debit, credit   | REAL      | exactly one is non-zero per row                          |
 | description     | TEXT?     | free text                                                |
 | created_at      | TEXT      | ISO-8601 UTC                                             |
@@ -163,6 +170,8 @@ Every business transaction inserts **exactly two rows** sharing the same
 
 v11 added `REFERENCES projects(id)` / `REFERENCES suppliers(id)` FK
 constraints. The migration nulls out orphans before recreating the table.
+v16 dropped the legacy `customer_id` column (the Customer entity was
+removed; the project is now the only counterparty).
 
 ### 4.2 `change_log` — audit trail
 
@@ -183,7 +192,9 @@ stored in `app_settings`.
 | `material_inventory`| per-purchase rows used for BvA + price-trend                            |
 | `material_types`    | user-defined material catalog (name, UoM, coverage rate, waste, lead-d) |
 | `labour_types`      | user-defined labour categories (name, description, default daily rate)  |
-| `app_settings`      | opaque `{key, value}` — theme, last_backup_at, device_id                |
+| `notes`             | free-text operational notes attached to a project or supplier (v14)     |
+| `follow_ups`        | recovery / billing reminders with expected_date, priority, status (v14) |
+| `app_settings`      | opaque `{key, value}` — theme, last_backup_at, device_id, tenant_id, last_pull_at_* |
 
 ### 4.4 Chart of Accounts (`core/constants.dart` → `Accounts`)
 
@@ -252,8 +263,8 @@ All financial calculations are SQL aggregates over `journal_entries`
 
 ### 6.1 `incomeFigures()` — single source of truth
 
-`LedgerRepository.incomeFigures({from, to, projectId})` returns the
-canonical P&L bundle used by both the Income Statement and the
+`LedgerRepository.incomeFigures({from, to, projectId, closeAsOf})` returns
+the canonical P&L bundle used by both the Income Statement and the
 dashboard's Net Profit. It implements **Percentage-of-Completion
 (cost-recovery variant)**:
 
@@ -269,6 +280,12 @@ dashboard's Net Profit. It implements **Percentage-of-Completion
   is a customer-deposit liability.
 - **Projects at risk**: every project ≥ 80% of budget is flagged for
   the dashboard warning panel, sorted with over-budget jobs first.
+
+`closeAsOf` is used by [`monthlyIncome`](#65-monthly-pl-trend) to ask
+"was this project closed at *that* moment?" — when supplied, the
+"closed" check compares `archived_at` against the snapshot date instead
+of reading the live `is_archived` flag. Without it, the live flag is
+used (this is what every other caller wants).
 
 ### 6.2 Dashboard snapshot — `accountSummaryProvider`
 
@@ -296,12 +313,18 @@ diluted "1700-day runway" artefact.
 
 ### 6.4 Other statements
 
-- **Balance Sheet** — Assets vs Liabilities + Equity, balanced indicator.
+- **Balance Sheet** — Net Worth model: `Assets − Liabilities = Net Worth`.
+  No equity plug; cumulative recognized profit appears as a cross-check
+  memo. Assets include cash, banks, counter receivables, project
+  receivables (under-funded projects) and supplier advances; liabilities
+  include supplier payables, counter payables, customer deposits and
+  the loss provision.
 - **Cash Flow** — `monthlyCashFlow(monthsBack=12)` bucketed by operating /
   financing / other.
-- **Aging Analysis** — FIFO open-balance matcher per party, bucketed
-  0-30 / 31-60 / 61-90 / 90+ days. Covers project receivables and
-  supplier payables.
+- **Aging Analysis** — FIFO open-balance matcher, bucketed
+  0-30 / 31-60 / 61-90 / 90+ days. Payables aging goes per supplier;
+  receivables aging splits across `agingProjectReceivables` (under-funded
+  projects) and `agingSupplierOverpayment` (advances we paid out).
 - **Budget vs Actual** — actual spend per material type (from
   `material_inventory`) + labour vs `Project.budget`. Overrun banner
   when `costs > budget`.
@@ -312,9 +335,25 @@ diluted "1700-day runway" artefact.
 - **Supplier-wise Spending** — total material + labour by supplier,
   filterable by period (all-time / 90 days / 30 days).
 - **Supplier / Bank / Project Ledger** — running balance for one party,
-  project-filterable, date-filterable.
+  project-filterable, date-filterable. Trial-balance header (opening /
+  debits / credits / closing) on every ledger; the project ledger also
+  shows per-supplier and per-material breakdowns.
 
-### 6.5 Charts
+### 6.5 Monthly P&L Trend
+
+`LedgerRepository.monthlyIncome(monthsBack=12)` returns one
+`MonthlyIncome` per month, oldest → newest. Each month is the **delta
+of two cumulative `incomeFigures` snapshots** taken at the
+month-end boundaries — a naive per-month window would systematically
+under-recognize PoC revenue because the in-progress
+`min(received, costs)` rule only converges when applied to lifetime
+cumulative totals. Each cumulative snapshot is computed with
+`closeAsOf = monthEnd` so projects archived later don't retroactively
+rewrite earlier months as "closed". A baseline snapshot at the day
+before the window start anchors the deltas so the oldest month
+doesn't absorb every prior-history recognition event.
+
+### 6.6 Charts
 
 | Chart                                       | Screen           | Data source                                                |
 | ------------------------------------------- | ---------------- | ---------------------------------------------------------- |
@@ -323,16 +362,18 @@ diluted "1700-day runway" artefact.
 | Spending over time (Day/Week/Month toggle)  | BvA              | `projectDailySpend(projectId)` aggregated in-widget        |
 | Net profit bar                              | Profitability    | `net` per project; emerald above zero, rose below          |
 | 7-day spending bar                          | Dashboard        | `overallDailySpend(daysBack: 7)` aggregated to the day     |
+| Monthly P&L trend (income/cost/net lines)   | Income Trend     | `monthlyIncome(monthsBack: 12)` cumulative deltas          |
 
 All charts use `fmtCompactMoney` for axis labels (Rs 1.5L, Rs 250k, etc.)
 with auto-picked "nice" intervals (1/2/5/10 × 10ⁿ).
 
-### 6.6 Exports
+### 6.7 Exports
 
 - **PDF** — `core/export/pdf_generator.dart` (Income Statement, Balance
   Sheet, Supplier Ledger, Wage Register).
 - **CSV** — `core/export/csv_export.dart` (RFC-4180 quoted; temp file →
-  `share_plus`). Available on every statement screen.
+  `share_plus`). Available on every statement screen and the Monthly P&L
+  Trend.
 
 ---
 
@@ -478,21 +519,67 @@ Settings → Audit → **Recent Errors** opens
 3. `RestoreGateway.initState()` decides whether to silently restore
    from `solo_con_latest.db` or proceed straight to HomeScreen (see
    section 7.2).
-4. `LocalDb.instance.open()` runs migrations to schema version 11.
+4. `LocalDb.instance.open()` runs migrations to schema version 16.
+
+---
+
+## 10A. Cloud sync
+
+Sync is opt-in: it only activates when `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` are baked into the build via `--dart-define`. With
+no credentials, `SupabaseConfig.configured` is false and `SyncService`
+no-ops.
+
+### 10A.1 Wire-up
+
+- `commitSyncWiringProvider` registers a listener on `LedgerRepository`
+  that calls `sync.syncNow()` after every successful commit. The
+  listener is debounced inside `SyncService` so a burst of writes
+  results in one push, not N.
+- `tenant_id` lives in `app_settings`. First sync generates a UUID v4
+  and stamps every outgoing row with it. Bringing up a second device
+  with the same tenant id (e.g. by importing a backup) is how
+  multi-device works.
+
+### 10A.2 Push
+
+Each push reads `synced = 0` rows from every domain table and
+`upsert`s them into the corresponding Supabase table tagged with
+`tenant_id`. On success, the local row's `synced` flag is set to 1.
+
+### 10A.3 Pull
+
+Pull is **INSERT OR IGNORE** by design — a row that already exists
+locally is skipped, so local writes are never overwritten by the
+server. A per-table cursor (`last_pull_at_<table>` in `app_settings`)
+narrows the query to rows with `updated_at > cursor`. Tables are
+pulled in FK-safe order: projects / suppliers / banks /
+counter_entities / material_types / labour_types first, then
+journal_entries / material_inventory / notes / follow_ups.
+
+### 10A.4 Schema
+
+The Postgres mirror lives in [supabase/migrations/0001_initial.sql](supabase/migrations/0001_initial.sql).
+Every table has `tenant_id uuid NOT NULL` and `updated_at timestamptz
+NOT NULL DEFAULT now()` with an `AFTER UPDATE` trigger
+(`bump_updated_at`) so the cursor query works without per-write hooks.
+RLS is open within the project: anyone with the anon key sees
+everything in the project, matching the no-auth single-operator design.
 
 ---
 
 ## 11. Test infrastructure
 
-**75 automated tests across 5 files**, all passing under `flutter test`:
+**106 automated tests across 6 files**, all passing under `flutter test`:
 
-| File                              | Tests | Coverage                                         |
-| --------------------------------- | ----- | ------------------------------------------------ |
-| `invariants_test.dart`            | 13    | Engine invariants — double-entry, reconciliation, soft delete, aging, audit, banks |
-| `business_logic_test.dart`        | 31    | PoC revenue recognition (9), labour-payment smart settlement (4), budget-mismatch gate (7), burn rate active-days (4), supplier-payable balance (4), end-to-end regressions (2) |
-| `backup_blackbox_test.dart`       | 19    | `validateBackupFile` (5), atomic copy (3), backup→restore round-trip (4), DB persistence (3), import rollback (2), corruption handling (2) |
-| `user_journeys_blackbox_test.dart`| 10    | Full user flows from project creation to archive |
-| `widget_test.dart`                | 2     | Account ID uniqueness, transaction kinds have label + blurb |
+| File                              | Coverage                                         |
+| --------------------------------- | ------------------------------------------------ |
+| `invariants_test.dart`            | Engine invariants — double-entry, reconciliation, soft delete, aging, audit, banks |
+| `business_logic_test.dart`        | PoC revenue recognition, labour-payment smart settlement, budget-mismatch gate, burn rate active-days, supplier-payable balance, end-to-end regressions |
+| `backup_blackbox_test.dart`       | `validateBackupFile`, atomic copy, backup→restore round-trip, DB persistence, import rollback, corruption handling |
+| `project_breakdown_test.dart`     | Per-supplier + per-material spend roll-ups, project filtering, soft-delete exclusion |
+| `user_journeys_blackbox_test.dart`| Full user flows from project creation to archive |
+| `widget_test.dart`                | Account ID uniqueness, transaction kinds have label + blurb |
 
 All tests use `sqflite_common_ffi` to drive a real SQLite engine
 (in-memory or temp-file) — no mocks. Schema is applied via
@@ -523,6 +610,11 @@ flutter analyze --no-fatal-infos              # static analysis
 | v9      | Removed seeded built-in material types — user defines every type from scratch |
 | v10     | labour_types table |
 | v11     | Added `REFERENCES projects(id)` and `REFERENCES suppliers(id)` FK constraints on journal_entries via table recreation; orphaned references nulled before migration |
+| v12     | `completion_percent` column on projects (0..100, driver for the Site Snapshot's projected-cost forecast) |
+| v13     | `transaction_id` denormalised onto material_inventory + soft-delete linkage so Material Price Trend / Budget vs Actual exclude deleted purchases |
+| v14     | Operational memory: `notes` and `follow_ups` tables — pinnable per-entity notes, recovery reminders with priority + status; `updated_at` columns on all soft-delete tables |
+| v15     | Cloud-sync plumbing: `synced` flag on every domain table, `tenant_id` + `last_pull_at_*` in app_settings, `updated_at` defaults applied across schema |
+| v16     | Removed the Customer entity: dropped `customers` table, dropped `customer_id` column from projects + journal_entries (DROP COLUMN requires SQLite ≥ 3.35; guarded with try/catch). Project is now the only counterparty |
 
 ---
 
@@ -556,9 +648,18 @@ flutter build appbundle --release
 
 # Windows desktop
 flutter build windows --release
+
+# With cloud sync — credentials baked in, not committed
+flutter build apk --release \
+  --dart-define=SUPABASE_URL=https://<project>.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=<publishable-anon-key>
 ```
 
 Signed APK lands at `build/app/outputs/flutter-apk/app-release.apk`.
+
+Before the first cloud-sync build, apply
+[supabase/migrations/0001_initial.sql](supabase/migrations/0001_initial.sql)
+in the Supabase Dashboard → SQL Editor → New Query.
 
 ### 13.4 Build-output relocation (Windows + OneDrive)
 
