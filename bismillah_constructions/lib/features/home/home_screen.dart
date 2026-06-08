@@ -241,18 +241,21 @@ class _PillNavBar extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        // Slightly less side margin so the pill has more room to breathe
+        // its larger destinations — keeps the tap targets generous on a
+        // 360-dp phone for users with big hands.
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
         child: Container(
-          height: 64,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: 76,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(32),
+            borderRadius: BorderRadius.circular(38),
             border: Border.all(color: scheme.outlineVariant),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 16,
+                blurRadius: 18,
                 offset: const Offset(0, 4),
               ),
             ],
@@ -289,34 +292,35 @@ class _PillDestination extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(28),
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
         padding: EdgeInsets.symmetric(
-          horizontal: selected ? 18 : 14,
-          vertical: 10,
+          horizontal: selected ? 22 : 18,
+          vertical: 14,
         ),
         decoration: BoxDecoration(
           color: selected ? scheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(28),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               selected ? item.selectedIcon : item.icon,
-              size: 22,
+              size: 26,
               color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
             ),
             if (selected) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Text(
                 item.label,
                 style: TextStyle(
                   color: scheme.onPrimary,
                   fontWeight: FontWeight.w600,
+                  fontSize: 15,
                 ),
               ),
             ],

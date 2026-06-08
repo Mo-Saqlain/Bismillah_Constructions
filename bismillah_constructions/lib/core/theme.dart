@@ -1,41 +1,54 @@
 import 'package:flutter/material.dart';
 
-/// 60-30-10 colour distribution per design spec:
-/// - 60% neutral base (Cool Gray surfaces / Deep Navy in dark)
-/// - 30% structural blue (Deep Navy AppBar)
-/// - 10% action (Indigo CTAs + 3% semantic Emerald/Rose for finance only)
+/// Material-3 palette: a neutral surface scaffold and AppBar so the
+/// only saturated element on screen is the floating indigo pill nav.
+/// Title and AppBar icons take the indigo primary so the AppBar
+/// echoes the pill's colour identity without slabbing a navy block
+/// across the top of every screen.
+///
+///  * Surfaces  — Cool gray in light, M3-derived dark gray in dark.
+///  * AppBar    — surface bg, indigo title + icons, hairline divider.
+///  * Accent    — indigo seed drives buttons, focus rings, the pill.
+///  * Finance   — emerald / rose strictly for signed money values.
 ThemeData buildTheme({Brightness brightness = Brightness.light}) {
-  // Indigo seed drives the primary palette — every FilledButton / ElevatedButton
-  // / focus ring inherits from this. This is the "7%" of the 60-30-10 mix.
   final scheme = ColorScheme.fromSeed(
     seedColor: const Color(0xFF3949AB), // Indigo 600
     brightness: brightness,
   );
 
-  // Structural Deep Navy — the "30%" reserved for the AppBar. Kept
-  // independent of the seed so the bar reads distinctly from indigo
-  // button accents. A slightly lighter shade is used in dark mode to
-  // avoid the eye-strain "wall of black-blue" effect.
-  const deepNavyLight = Color(0xFF1A237E); // Indigo 900
-  const deepNavyDark = Color(0xFF252F5C);  // mid-tone navy, easier on eyes
-
-  // Cool Gray scaffold for light mode (the "60%" whitespace). For dark
-  // mode we let Material 3 derive the scaffold from the seed
-  // (`scheme.surface`) — it produces a soft indigo-tinted dark gray that
-  // is comfortable for long sessions and still keeps the blue identity.
+  // Cool Gray scaffold for light mode. Dark mode falls back to the
+  // M3-derived surface — a soft indigo-tinted dark gray that is
+  // comfortable for long sessions.
   const coolGrayLight = Color(0xFFF5F5F7);
+  final appBarBg = brightness == Brightness.light
+      ? coolGrayLight
+      : scheme.surface;
 
   return ThemeData(
     colorScheme: scheme,
     useMaterial3: true,
-    scaffoldBackgroundColor:
-        brightness == Brightness.light ? coolGrayLight : scheme.surface,
+    scaffoldBackgroundColor: appBarBg,
     appBarTheme: AppBarTheme(
-      backgroundColor:
-          brightness == Brightness.light ? deepNavyLight : deepNavyDark,
-      foregroundColor: Colors.white,
+      backgroundColor: appBarBg,
+      foregroundColor: scheme.primary,
+      // Disable Material 3's automatic scrolled-tint so the bar stays
+      // flat with the scaffold instead of darkening on scroll.
+      surfaceTintColor: Colors.transparent,
       elevation: 0,
+      scrolledUnderElevation: 0,
       centerTitle: false,
+      titleTextStyle: TextStyle(
+        color: scheme.primary,
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.15,
+      ),
+      iconTheme: IconThemeData(color: scheme.primary),
+      // Hairline divider below the bar to separate it from the body
+      // now that the colour is no longer doing that job.
+      shape: Border(
+        bottom: BorderSide(color: scheme.outlineVariant, width: 1),
+      ),
     ),
     inputDecorationTheme: const InputDecorationTheme(
       border: OutlineInputBorder(),
