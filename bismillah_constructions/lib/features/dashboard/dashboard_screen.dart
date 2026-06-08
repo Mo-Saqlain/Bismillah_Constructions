@@ -10,6 +10,7 @@ import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
 import '../common/async_view.dart';
 import '../followups/followups_screen.dart';
+import '../home/home_screen.dart' show kPillNavReservedHeight;
 import '../reports/bank_ledger_screen.dart';
 import '../transactions/transaction_history_screen.dart';
 import '../transactions/transaction_picker_screen.dart';
@@ -35,14 +36,24 @@ class DashboardScreen extends ConsumerWidget {
           const SizedBox(width: 8),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) => const TransactionPickerScreen()),
+      // Reserve space below the FAB so it lifts above the floating
+      // pill nav (HomeScreen sets extendBody: true so the body — and
+      // therefore the FAB's default position — extends behind the
+      // pill). Padding-as-FAB works because Scaffold places the
+      // whole widget at endFloat; the bottom margin pushes the FAB
+      // up by exactly the pill's reserved height + a small visual
+      // gap.
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: kPillNavReservedHeight + 4),
+        child: FloatingActionButton.extended(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const TransactionPickerScreen()),
+          ),
+          icon: const Icon(Icons.add),
+          label: const Text('New Transaction'),
         ),
-        icon: const Icon(Icons.add),
-        label: const Text('New Transaction'),
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -52,7 +63,11 @@ class DashboardScreen extends ConsumerWidget {
               );
         },
         child: ListView(
-          padding: const EdgeInsets.all(12),
+          // Extra bottom padding so the last card can scroll above
+          // the floating pill nav + raised FAB instead of being
+          // hidden behind them.
+          padding: const EdgeInsets.fromLTRB(
+              12, 12, 12, 12 + kPillNavReservedHeight + 72),
           children: [
             // ── Treasury overview ─────────────────────────────────────────
             AsyncView(

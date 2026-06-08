@@ -6,6 +6,12 @@ import '../manage/manage_screen.dart';
 import '../reports/reports_screen.dart';
 import '../settings/settings_screen.dart';
 
+/// Total vertical space the floating pill reserves at the bottom of
+/// the screen (pill height + bottom margin). Tab screens with a FAB
+/// pad their FAB up by this amount so it doesn't disappear behind
+/// the pill — see [DashboardScreen].
+const double kPillNavReservedHeight = 76 + 14;
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -205,7 +211,10 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   }
 }
 
-/// Data for a single destination in [_PillNavBar].
+/// Data for a single destination in [_PillNavBar]. `label` is no
+/// longer painted (icons-only nav for less visual noise), but kept
+/// for semantics — passed to [Semantics] so screen readers and
+/// long-press tooltips still announce each destination.
 class _PillItem {
   const _PillItem({
     required this.icon,
@@ -296,40 +305,31 @@ class _PillDestination extends StatelessWidget {
     // [Radii.medium] — slightly softer than a card so it still reads
     // as a tap target inside the rounded tray, but not a stadium.
     const innerRadius = 18.0;
-    return InkWell(
-      borderRadius: BorderRadius.circular(innerRadius),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        padding: EdgeInsets.symmetric(
-          horizontal: selected ? 22 : 18,
-          vertical: 14,
-        ),
-        decoration: BoxDecoration(
-          color: selected ? scheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(innerRadius),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              selected ? item.selectedIcon : item.icon,
-              size: 26,
-              color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
-            ),
-            if (selected) ...[
-              const SizedBox(width: 10),
-              Text(
-                item.label,
-                style: TextStyle(
-                  color: scheme.onPrimary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                ),
-              ),
-            ],
-          ],
+    return Semantics(
+      label: item.label,
+      selected: selected,
+      button: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(innerRadius),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          // Fixed-size tap target so the bar's spacing doesn't shift
+          // when the active destination changes — the only thing that
+          // animates is the background colour.
+          width: 56,
+          height: 56,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? scheme.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(innerRadius),
+          ),
+          child: Icon(
+            selected ? item.selectedIcon : item.icon,
+            size: 26,
+            color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
+          ),
         ),
       ),
     );

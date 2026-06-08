@@ -12,6 +12,7 @@ import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../data/sync/sync_service.dart';
 import '../../providers/providers.dart';
+import '../home/home_screen.dart' show kPillNavReservedHeight;
 import 'backups_list_screen.dart';
 import 'change_log_screen.dart';
 import 'recent_errors_screen.dart';
@@ -245,7 +246,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        // Bottom padding clears the floating pill nav.
+        padding: const EdgeInsets.fromLTRB(
+            12, 12, 12, 12 + kPillNavReservedHeight),
         children: [
           _SectionTitle('Appearance'),
           Card(

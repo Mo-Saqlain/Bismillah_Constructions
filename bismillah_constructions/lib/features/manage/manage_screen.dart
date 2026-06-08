@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../followups/followups_screen.dart';
+import '../home/home_screen.dart' show kPillNavReservedHeight;
 import '../parties/banks_screen.dart';
 import '../parties/parties_screen.dart';
 import '../projects/projects_screen.dart';
@@ -23,7 +24,10 @@ class ManageScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Manage')),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        // Bottom padding clears the floating pill nav so the last
+        // tile can scroll above it.
+        padding: const EdgeInsets.fromLTRB(
+            12, 12, 12, 12 + kPillNavReservedHeight),
         children: [
           _ManageCard(
             icon: Icons.foundation,

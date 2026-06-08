@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../home/home_screen.dart' show kPillNavReservedHeight;
 import 'aging_analysis_screen.dart';
 import 'aging_receivables_screen.dart';
 import 'balance_sheet_screen.dart';
@@ -30,7 +31,9 @@ class ReportsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Reports')),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        // Bottom padding clears the floating pill nav.
+        padding: const EdgeInsets.fromLTRB(
+            12, 12, 12, 12 + kPillNavReservedHeight),
         children: [
           _SectionTitle('Ledgers'),
           _ReportTile(
