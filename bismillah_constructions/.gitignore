@@ -82,6 +82,8 @@ coverage/
 *.env
 *.env.local
 **/secrets.dart
+secrets/
+!secrets/dart_defines.example.json
 **/solo_con_*.db
 *.before_import
 *.before_rollback

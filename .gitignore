@@ -22,6 +22,8 @@ desktop.ini
 .env
 .env.local
 .env.*.local
+bismillah_constructions/secrets/
+!bismillah_constructions/secrets/dart_defines.example.json
 
 # Backup artefacts a user may drop at the workspace root by accident
 solo_con_*.db
