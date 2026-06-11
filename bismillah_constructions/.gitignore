@@ -85,3 +85,7 @@ coverage/
 **/solo_con_*.db
 *.before_import
 *.before_rollback
+
+# Generated stress-test DB (run `flutter test tool/generate_stress_db.dart`
+# to regenerate locally — it's a 2-3 MB binary artefact, not source).
+/output/
