@@ -303,7 +303,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           12 + kPillNavReservedHeight,
         ),
         children: [
-          _SectionTitle('User Account'),
+          // ── Account Header Card ─────────────────────────────────────
           Card(
             child: ListTile(
               leading: CircleAvatar(
@@ -341,10 +341,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _SectionTitle('Appearance'),
+
+          // ── Sub-section 1: Appearance & Theme ───────────────────────
           Card(
-            child: Column(
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.palette_outlined),
+              title: const Text('Appearance & Theme', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                switch (mode) {
+                  ThemeMode.system => 'Theme: System Default',
+                  ThemeMode.light => 'Theme: Light Mode',
+                  ThemeMode.dark => 'Theme: Dark Mode',
+                },
+                style: const TextStyle(fontSize: 12),
+              ),
               children: [
+                const Divider(height: 1),
                 _ThemeOption(
                   label: 'System default',
                   value: ThemeMode.system,
@@ -370,10 +383,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _SectionTitle('Backup & Export'),
+
+          // ── Sub-section 2: Backup & Recovery ───────────────────────
           Card(
-            child: Column(
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.backup_outlined),
+              title: const Text('Backup & Recovery', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                _lastBackup == null
+                    ? 'Last backup: Never'
+                    : 'Last backup: ${fmtDateTime(_lastBackup!)}',
+                style: const TextStyle(fontSize: 12),
+              ),
               children: [
+                const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.folder_outlined),
                   title: const Text('Backup folder'),
@@ -409,7 +433,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.history),
-                  title: const Text('Last backup'),
+                  title: const Text('Last backup timestamp'),
                   subtitle: Text(
                     _lastBackup == null ? 'Never' : fmtDateTime(_lastBackup!),
                   ),
@@ -482,133 +506,160 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 12),
+
+          // ── Sub-section 3: Cloud Synchronization ────────────────────
           if (SupabaseConfig.configured) ...[
-            _SectionTitle('Cloud Sync'),
-            const _CloudSyncCard(),
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                leading: const Icon(Icons.cloud_sync_outlined),
+                title: const Text('Cloud Synchronization', style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Realtime sync & operator tenant settings', style: TextStyle(fontSize: 12)),
+                children: const [
+                  Divider(height: 1),
+                  _CloudSyncCard(),
+                ],
+              ),
+            ),
             const SizedBox(height: 12),
           ],
-          _SectionTitle('Danger Zone'),
+
+          // ── Sub-section 4: Audit & Diagnostics ──────────────────────
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.cleaning_services, color: Colors.red),
-              title: const Text('Wipe All Data (Local & Cloud)'),
-              subtitle: const Text(
-                'Permanently clears all projects, transactions, inventory, notes and cloud data across all connected devices.',
-              ),
-              onTap: () async {
-                final user = ref.read(currentUserProvider);
-                if (user?.isAdmin != true) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Access Denied: Only the superuser (admin) can wipe all data.'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
-
-                final repo = await ref.read(entityRepoProvider.future);
-                final tenant = await repo.tenantIdOrNull();
-                if (!context.mounted) return;
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => _WipeAllDataDialog(tenantId: tenant),
-                );
-                if (confirm != true) return;
-                if (!context.mounted) return;
-                try {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('Wiping all local and cloud data across all devices…'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-
-                  if (SupabaseConfig.configured) {
-                    final syncSvc = await ref.read(syncServiceFutureProvider.future);
-                    await syncSvc.wipeCloudData();
-                  }
-
-                  final ledger = await ref.read(ledgerRepoProvider.future);
-                  await ledger.wipeAllData();
-                  await repo.resetPushCursors();
-                  await repo.resetPullCursors();
-
-                  bumpLedger(ref);
-                  if (!context.mounted) return;
-                  messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('All local & cloud data successfully wiped across all devices ✓'),
-                      backgroundColor: Colors.red,
-                      duration: Duration(seconds: 4),
-                    ),
-                  );
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Wipe failed: $e')),
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Audit & Diagnostics', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Change logs, security audit & error history', style: TextStyle(fontSize: 12)),
+              children: [
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.fact_check),
+                  title: const Text('Change Log'),
+                  subtitle: Text(
+                    currentUser?.isAdmin == true
+                        ? 'New entries, edits, deletes and archives. Export to CSV.'
+                        : 'Restricted to Superuser (admin)',
+                  ),
+                  trailing: Icon(
+                    currentUser?.isAdmin == true
+                        ? Icons.chevron_right
+                        : Icons.lock_outline,
+                  ),
+                  onTap: () {
+                    if (currentUser?.isAdmin != true) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Access Denied: Only the superuser (admin) has access to the Change Log.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ChangeLogScreen()),
                     );
-                  }
-                }
-              },
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.bug_report_outlined,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  title: const Text('Recent Errors'),
+                  subtitle: const Text(
+                    'In-app log of framework, async and widget errors '
+                    'caught this session.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RecentErrorsScreen()),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 12),
-          _SectionTitle('Audit'),
+
+          // ── Sub-section 5: Danger Zone ──────────────────────────────
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.fact_check),
-              title: const Text('Change Log'),
-              subtitle: Text(
-                currentUser?.isAdmin == true
-                    ? 'New entries, edits, deletes and archives. Export to CSV.'
-                    : 'Restricted to Superuser (admin)',
-              ),
-              trailing: Icon(
-                currentUser?.isAdmin == true
-                    ? Icons.chevron_right
-                    : Icons.lock_outline,
-              ),
-              onTap: () {
-                if (currentUser?.isAdmin != true) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Access Denied: Only the superuser (admin) has access to the Change Log.'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ChangeLogScreen()),
-                );
-              },
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: Icon(
-                Icons.bug_report_outlined,
-                color: Theme.of(context).colorScheme.error,
-              ),
-              title: const Text('Recent Errors'),
-              subtitle: const Text(
-                'In-app log of framework, async and widget errors '
-                'caught this session.',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const RecentErrorsScreen()),
-              ),
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.warning_amber_rounded, color: Colors.red),
+              title: const Text('Danger Zone', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+              subtitle: const Text('Wipe all local and cloud database records', style: TextStyle(fontSize: 12, color: Colors.red)),
+              children: [
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services, color: Colors.red),
+                  title: const Text('Wipe All Data (Local & Cloud)'),
+                  subtitle: const Text(
+                    'Permanently clears all projects, transactions, inventory, notes and cloud data across all connected devices.',
+                  ),
+                  onTap: () async {
+                    final user = ref.read(currentUserProvider);
+                    if (user?.isAdmin != true) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Access Denied: Only the superuser (admin) can wipe all data.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+
+                    final repo = await ref.read(entityRepoProvider.future);
+                    final tenant = await repo.tenantIdOrNull();
+                    if (!context.mounted) return;
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => _WipeAllDataDialog(tenantId: tenant),
+                    );
+                    if (confirm != true) return;
+                    if (!context.mounted) return;
+                    try {
+                      final messenger = ScaffoldMessenger.of(context);
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('Wiping all local and cloud data across all devices…'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+
+                      if (SupabaseConfig.configured) {
+                        final syncSvc = await ref.read(syncServiceFutureProvider.future);
+                        await syncSvc.wipeCloudData();
+                      }
+
+                      final ledger = await ref.read(ledgerRepoProvider.future);
+                      await ledger.wipeAllData();
+                      await repo.resetPushCursors();
+                      await repo.resetPullCursors();
+
+                      bumpLedger(ref);
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('All local & cloud data successfully wiped across all devices ✓'),
+                          backgroundColor: Colors.red,
+                          duration: Duration(seconds: 4),
+                        ),
+                      );
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Wipe failed: $e')),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 24),
-          // The launcher icon is the only place the brand mark appears.
-          // The footer keeps just the wordmark so the screen still feels
-          // signed.
           Center(
             child: Text(
               'Bismillah',
@@ -621,20 +672,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
-    child: Text(
-      text,
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-        color: Theme.of(context).colorScheme.primary,
-      ),
-    ),
-  );
-}
+
 
 /// Bullet row used in the Import warning dialog. Pulled out so the dialog
 /// stays readable and indents stay consistent across all four bullets.

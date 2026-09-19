@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:bismillah_constructions/shared/data/db/local_db.dart';
-import 'package:bismillah_constructions/shared/data/models/app_user.dart';
 import 'package:bismillah_constructions/shared/data/repositories/user_repository.dart';
 
 void main() {

@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:bismillah_constructions/shared/data/models/app_user.dart';
 import 'package:bismillah_constructions/shared/data/repositories/user_repository.dart';
 import 'package:bismillah_constructions/shared/providers/db_providers.dart';
-import 'package:bismillah_constructions/shared/providers/entity_providers.dart';
 import 'package:bismillah_constructions/shared/providers/sync_providers.dart';
 
 /// Provider for UserRepository

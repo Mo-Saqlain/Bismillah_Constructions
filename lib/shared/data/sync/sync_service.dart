@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:sqflite/sqflite.dart';
@@ -219,6 +220,10 @@ class SyncService {
       return SupabaseHealth(SupabaseHealthState.ok, latency: sw.elapsed);
     } catch (e) {
       sw.stop();
+      if (isNetworkError(e)) {
+        return SupabaseHealth(SupabaseHealthState.offline,
+            message: 'Supabase host unreachable or network offline.');
+      }
       return SupabaseHealth(SupabaseHealthState.error, message: e.toString());
     }
   }
@@ -308,6 +313,15 @@ class SyncService {
       // harmless — skip silently rather than spamming the error reporter.
       // Anything else is a real sync failure worth surfacing.
       if (_isDatabaseClosed(e)) return;
+      if (isNetworkError(e)) {
+        _emit(SyncStatus(
+          state: SyncState.offline,
+          pending: _last.pending,
+          message: 'Offline / Supabase host lookup failed.',
+          lastSyncAt: _last.lastSyncAt,
+        ));
+        return;
+      }
       _emit(SyncStatus(
         state: SyncState.error,
         pending: _last.pending,
@@ -315,6 +329,20 @@ class SyncService {
         lastSyncAt: _last.lastSyncAt,
       ));
     }
+  }
+
+  /// True when the error represents a network connection failure or DNS host lookup issue.
+  static bool isNetworkError(Object e) {
+    if (e is SocketException) return true;
+    final str = e.toString().toLowerCase();
+    return str.contains('socketexception') ||
+        str.contains('failed host lookup') ||
+        str.contains('clientexception') ||
+        str.contains('networkerror') ||
+        str.contains('connection refused') ||
+        str.contains('connection closed') ||
+        str.contains('no address associated with hostname') ||
+        str.contains('timeout');
   }
 
   /// A `database_closed` error means the DB was reinitialised under us during
@@ -410,6 +438,9 @@ class SyncService {
           }
         }
       } catch (e) {
+        if (isNetworkError(e)) {
+          rethrow;
+        }
         // Poison-pill outbox isolation: fall back to item-by-item push so one
         // failing row payload doesn't freeze the rest of the pending sync queue.
         for (final r in slice) {

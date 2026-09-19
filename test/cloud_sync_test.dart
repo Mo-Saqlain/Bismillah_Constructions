@@ -25,7 +25,7 @@ import 'package:bismillah_constructions/shared/data/db/local_db.dart';
 import 'package:bismillah_constructions/shared/data/repositories/entity_repository.dart';
 import 'package:bismillah_constructions/shared/data/repositories/ledger_repository.dart';
 import 'package:bismillah_constructions/shared/data/sync/sync_service.dart'
-    show serverTimestampIsNewer;
+    show SyncService, serverTimestampIsNewer;
 
 late Database _db;
 late EntityRepository _entityRepo;
@@ -385,6 +385,38 @@ void main() {
       expect(pushed, containsAll(['item-1', 'item-3']));
       expect(pushed, isNot(contains('item-poison')));
       expect(errors, contains('item-poison'));
+    });
+  });
+
+  group('Network error classification', () {
+    test('identifies SocketException and host lookup failures as network errors', () {
+      expect(
+        SyncService.isNetworkError(
+          'Failed to push app_users row user- admin-superuser: ClientException with SocketException: Failed host lookup: \'yuqbibwvpcbwvioazhtc.supabase.co\' (OS Error: No address associated with hostname, errno = 7), uri=https://yuqbibwvpcbwvioazhtc.supabase.co/rest/v1/app_users',
+        ),
+        isTrue,
+      );
+      expect(
+        SyncService.isNetworkError(
+          Exception('ClientException with SocketException: Connection refused'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('does not misclassify data/schema constraint errors as network errors', () {
+      expect(
+        SyncService.isNetworkError(
+          Exception('Postgres error: null value in column "username" violates not-null constraint'),
+        ),
+        isFalse,
+      );
+      expect(
+        SyncService.isNetworkError(
+          Exception('FOREIGN KEY constraint failed'),
+        ),
+        isFalse,
+      );
     });
   });
 }
