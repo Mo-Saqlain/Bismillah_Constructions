@@ -107,12 +107,13 @@ class ChangeLogScreen extends ConsumerWidget {
 
   Future<void> _exportCsv(_LogBundle b) async {
     final buf = StringBuffer();
-    buf.writeln('timestamp,action,what,details,note,device');
+    buf.writeln('timestamp,action,user,what,details,note,device');
     for (final c in b.entries) {
       final summary = _humanize(c, b);
       buf.writeln([
         _csv(c.timestamp.toIso8601String()),
         _csv(c.action.label),
+        _csv(c.username ?? 'System'),
         _csv(summary.title),
         _csv(summary.subtitle),
         _csv(c.note ?? ''),
@@ -268,8 +269,10 @@ class _LogTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (summary.subtitle.isNotEmpty) Text(summary.subtitle),
-              Text(_relativeTime(entry.timestamp),
-                  style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                'By: ${entry.username ?? 'System'} • ${_relativeTime(entry.timestamp)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
               if (entry.note != null && entry.note!.isNotEmpty)
                 Text('Note: ${entry.note}',
                     style: Theme.of(context).textTheme.bodySmall),
@@ -305,6 +308,7 @@ class _LogTile extends StatelessWidget {
               Text(summary.subtitle),
               const SizedBox(height: 8),
               Text('Action: ${c.action.label}'),
+              Text('User: ${c.username ?? 'System'}'),
               Text('When: ${fmtDateTime(c.timestamp)}'),
               if (c.note != null && c.note!.isNotEmpty)
                 Text('Note: ${c.note}'),

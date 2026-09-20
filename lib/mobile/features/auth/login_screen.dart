@@ -17,6 +17,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _passwordCtrl = TextEditingController();
 
   bool _obscurePassword = true;
+  bool _keepLoggedIn = false;
   bool _loading = false;
   String? _errorMessage;
 
@@ -38,7 +39,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     try {
       await ref
           .read(authNotifierProvider.notifier)
-          .login(_usernameCtrl.text, _passwordCtrl.text);
+          .login(_usernameCtrl.text, _passwordCtrl.text, keepLoggedIn: _keepLoggedIn);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -223,7 +224,31 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               return null;
                             },
                           ),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 8),
+
+                          // Keep Me Logged In Checkbox
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text(
+                              'Keep me logged in',
+                              style: TextStyle(fontSize: 14),
+                            ),
+                            subtitle: const Text(
+                              'Stay logged in across app restarts',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            value: _keepLoggedIn,
+                            onChanged: _loading
+                                ? null
+                                : (val) {
+                                    setState(() {
+                                      _keepLoggedIn = val ?? false;
+                                    });
+                                  },
+                            controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                          ),
+                          const SizedBox(height: 16),
 
                           // Login Button
                           FilledButton(

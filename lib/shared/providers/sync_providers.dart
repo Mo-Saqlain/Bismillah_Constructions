@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:bismillah_constructions/shared/data/services/backup_service.dart';
 import 'package:bismillah_constructions/shared/data/sync/sync_service.dart';
+import 'package:bismillah_constructions/shared/providers/auth_provider.dart';
 import 'package:bismillah_constructions/shared/providers/db_providers.dart';
 
 final syncServiceFutureProvider = FutureProvider<SyncService>((ref) async {
@@ -63,15 +64,16 @@ final commitSyncWiringProvider = FutureProvider<void>((ref) async {
   ref.onDispose(() => ledger.removeCommitListener(onCommit));
 });
 
-/// Bumps `ledgerVersionProvider` whenever the sync engine applies a remote
-/// change — from a Realtime event or a pull — so every open screen refetches
-/// live. This is the inbound half of real-time sync: [commitSyncWiringProvider]
+/// Bumps `ledgerVersionProvider` and `userVersionProvider` whenever the sync engine
+/// applies a remote change — from a Realtime event or a pull — so every open screen
+/// refetches live. This is the inbound half of real-time sync: [commitSyncWiringProvider]
 /// pushes local edits up, this pulls remote edits into the UI. Watched once at
 /// app boot.
 final remoteRefreshWiringProvider = FutureProvider<void>((ref) async {
   final sync = await ref.watch(syncServiceFutureProvider.future);
   final sub = sync.dataChanged.listen((_) {
     ref.read(ledgerVersionProvider.notifier).update((v) => v + 1);
+    ref.read(userVersionProvider.notifier).update((v) => v + 1);
   });
   ref.onDispose(sub.cancel);
 });

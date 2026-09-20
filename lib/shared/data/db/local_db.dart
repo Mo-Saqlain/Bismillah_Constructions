@@ -13,7 +13,7 @@ class LocalDb {
   /// through [open], which routes through [_onCreate] / [_onUpgrade] like
   /// normal.
   @visibleForTesting
-  Future<void> applySchemaForTests(Database db) => _onCreate(db, 21);
+  Future<void> applySchemaForTests(Database db) => _onCreate(db, 22);
 
   Database? _db;
   String? _dbPath;
@@ -49,7 +49,7 @@ class LocalDb {
     _db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 21,
+        version: 22,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -185,6 +185,7 @@ class LocalDb {
         new_data TEXT,
         note TEXT,
         device_id TEXT,
+        username TEXT,
         timestamp TEXT NOT NULL
       )
     ''');
@@ -982,6 +983,12 @@ class LocalDb {
 
         await _seedSuperuser(db);
       } catch (_) {/* tables may already exist */}
+    }
+
+    if (oldVersion < 22) {
+      try {
+        await db.execute('ALTER TABLE change_log ADD COLUMN username TEXT');
+      } catch (_) {}
     }
   }
 

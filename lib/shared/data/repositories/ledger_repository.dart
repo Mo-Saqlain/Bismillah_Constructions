@@ -61,6 +61,24 @@ class LedgerRepository {
     return v;
   }
 
+  Future<String?> _activeUsername() async {
+    final rows = await _db.query('app_settings',
+        where: 'key = ?', whereArgs: ['active_user_id'], limit: 1);
+    final activeUserId = rows.isEmpty ? null : rows.first['value'] as String?;
+    if (activeUserId == null || activeUserId.isEmpty) return null;
+    final userRows = await _db.query(
+      'app_users',
+      columns: ['username'],
+      where: 'id = ? AND is_deleted = 0',
+      whereArgs: [activeUserId],
+      limit: 1,
+    );
+    if (userRows.isNotEmpty) {
+      return userRows.first['username'] as String?;
+    }
+    return null;
+  }
+
   // -------------------- Validation helpers --------------------
 
   /// Throws [ArgumentError] if [value] is null or blank. Used to catch
@@ -477,6 +495,7 @@ class LedgerRepository {
     final original = rows.map(JournalEntry.fromMap).toList();
     final now = DateTime.now().toUtc();
     final dev = await _deviceId();
+    final user = await _activeUsername();
 
     await _db.transaction((txn) async {
       await txn.update(
@@ -503,6 +522,7 @@ class LedgerRepository {
             originalData: jsonEncode(original.map((e) => e.toMap()).toList()),
             note: note,
             deviceId: dev,
+            username: user,
             timestamp: now,
           ).toMap());
     });
@@ -521,6 +541,7 @@ class LedgerRepository {
     final original = rows.map(JournalEntry.fromMap).toList();
     final now = DateTime.now().toUtc();
     final dev = await _deviceId();
+    final user = await _activeUsername();
 
     await _db.transaction((txn) async {
       await txn.delete('journal_entries',
@@ -540,6 +561,7 @@ class LedgerRepository {
             originalData: jsonEncode(original.map((e) => e.toMap()).toList()),
             note: note ?? 'hard delete',
             deviceId: dev,
+            username: user,
             timestamp: now,
           ).toMap());
     });
@@ -555,6 +577,7 @@ class LedgerRepository {
     if (rows.isEmpty) return;
     final now = DateTime.now().toUtc();
     final dev = await _deviceId();
+    final user = await _activeUsername();
 
     await _db.transaction((txn) async {
       await txn.update(
@@ -579,6 +602,7 @@ class LedgerRepository {
             action: ChangeAction.restore,
             note: note,
             deviceId: dev,
+            username: user,
             timestamp: now,
           ).toMap());
     });

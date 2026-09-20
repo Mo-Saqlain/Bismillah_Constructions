@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:bismillah_constructions/shared/providers/providers.dart';
 import 'package:bismillah_constructions/shared/widgets/sync_indicator.dart';
+import 'package:bismillah_constructions/mobile/features/auth/login_screen.dart';
 import 'package:bismillah_constructions/desktop/tabs/dashboard_tab.dart';
 import 'package:bismillah_constructions/desktop/tabs/labour_tab.dart';
 import 'package:bismillah_constructions/desktop/tabs/materials_tab.dart';
@@ -77,6 +78,11 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
 
   @override
   Widget build(BuildContext context) {
+    final user = ref.watch(currentUserProvider);
+    if (user == null) {
+      return const LoginScreen();
+    }
+
     final mode = ref.watch(themeModeProvider);
     final isDark = mode == ThemeMode.dark ||
         (mode == ThemeMode.system &&

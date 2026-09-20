@@ -37,6 +37,22 @@ class EntityRepository {
     return v;
   }
 
+  Future<String?> _activeUsername() async {
+    final activeUserId = await getSetting('active_user_id');
+    if (activeUserId == null || activeUserId.isEmpty) return null;
+    final rows = await _db.query(
+      'app_users',
+      columns: ['username'],
+      where: 'id = ? AND is_deleted = 0',
+      whereArgs: [activeUserId],
+      limit: 1,
+    );
+    if (rows.isNotEmpty) {
+      return rows.first['username'] as String?;
+    }
+    return null;
+  }
+
   // ---- Projects ----
 
   Future<Project> createProject({
@@ -1404,7 +1420,9 @@ class EntityRepository {
     Map<String, Object?>? originalData,
     Map<String, Object?>? newData,
     String? note,
+    String? username,
   }) async {
+    final user = username ?? await _activeUsername();
     await _db.insert(
         'change_log',
         ChangeLog(
@@ -1417,6 +1435,7 @@ class EntityRepository {
           newData: newData == null ? null : jsonEncode(newData),
           note: note,
           deviceId: await _deviceId(),
+          username: user,
           timestamp: DateTime.now().toUtc(),
         ).toMap());
   }
