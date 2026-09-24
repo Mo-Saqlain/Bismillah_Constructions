@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:bismillah_constructions/shared/data/db/local_db.dart';
 import 'package:bismillah_constructions/shared/data/models/access_request.dart';
 import 'package:bismillah_constructions/shared/data/models/app_user.dart';
 
@@ -11,21 +12,38 @@ class UserRepository {
 
   /// Retrieve all non-deleted users
   Future<List<AppUser>> getUsers() async {
-    final rows = await _db.query(
+    var rows = await _db.query(
       'app_users',
       where: 'is_deleted = 0',
       orderBy: 'username ASC',
     );
+    if (rows.isEmpty) {
+      await LocalDb.seedSuperuser(_db);
+      rows = await _db.query(
+        'app_users',
+        where: 'is_deleted = 0',
+        orderBy: 'username ASC',
+      );
+    }
     return rows.map(AppUser.fromMap).toList();
   }
 
   /// Get user by username
   Future<AppUser?> getUserByUsername(String username) async {
-    final rows = await _db.query(
+    final trimmed = username.trim();
+    var rows = await _db.query(
       'app_users',
       where: 'LOWER(username) = LOWER(?) AND is_deleted = 0',
-      whereArgs: [username.trim()],
+      whereArgs: [trimmed],
     );
+    if (rows.isEmpty && (trimmed.toLowerCase() == 'admin' || trimmed.isEmpty)) {
+      await LocalDb.seedSuperuser(_db);
+      rows = await _db.query(
+        'app_users',
+        where: 'LOWER(username) = LOWER(?) AND is_deleted = 0',
+        whereArgs: [trimmed],
+      );
+    }
     if (rows.isEmpty) return null;
     return AppUser.fromMap(rows.first);
   }
@@ -44,7 +62,11 @@ class UserRepository {
   /// Validates user credentials. Returns user if valid, null otherwise.
   Future<AppUser?> validateCredentials(String username, String password) async {
     final trimmed = username.trim();
-    final user = await getUserByUsername(trimmed);
+    var user = await getUserByUsername(trimmed);
+    if (user == null && trimmed.toLowerCase() == 'admin') {
+      await LocalDb.seedSuperuser(_db);
+      user = await getUserByUsername(trimmed);
+    }
     if (user == null) return null;
 
     final inputHash = AppUser.hashPassword(password);

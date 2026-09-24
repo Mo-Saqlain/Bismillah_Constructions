@@ -170,4 +170,16 @@ void main() {
     // User is automatically logged out
     expect(container.read(currentUserProvider), isNull);
   });
+
+  test('Wiping database automatically re-seeds superuser admin account', () async {
+    // Delete all app_users directly to simulate wipe
+    await db.delete('app_users');
+    final admin = await userRepo.getUserByUsername('admin');
+    expect(admin, isNotNull);
+    expect(admin!.username, equals('admin'));
+
+    final valid = await userRepo.validateCredentials('admin', 'Tech@123');
+    expect(valid, isNotNull);
+    expect(valid!.username, equals('admin'));
+  });
 }

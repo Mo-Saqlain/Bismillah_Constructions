@@ -57,6 +57,7 @@ class LocalDb {
         onUpgrade: _onUpgrade,
       ),
     );
+    await seedSuperuser(_db!);
     return _db!;
   }
 
@@ -382,7 +383,7 @@ class LocalDb {
     }
 
     // Seed default admin superuser (admin / Tech@123)
-    await _seedSuperuser(db);
+    await seedSuperuser(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -981,7 +982,7 @@ class LocalDb {
           ''');
         }
 
-        await _seedSuperuser(db);
+        await seedSuperuser(db);
       } catch (_) {/* tables may already exist */}
     }
 
@@ -992,11 +993,11 @@ class LocalDb {
     }
   }
 
-  static Future<void> _seedSuperuser(Database db) async {
+  static Future<void> seedSuperuser(DatabaseExecutor db) async {
     try {
       final existing = await db.query(
         'app_users',
-        where: 'username = ?',
+        where: 'username = ? AND is_deleted = 0',
         whereArgs: ['admin'],
       );
       if (existing.isEmpty) {

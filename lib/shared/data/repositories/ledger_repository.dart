@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:bismillah_constructions/shared/core/constants.dart';
+import 'package:bismillah_constructions/shared/data/db/local_db.dart';
 import 'package:bismillah_constructions/shared/data/models/change_log.dart';
 import 'package:bismillah_constructions/shared/data/models/journal_entry.dart';
 import 'package:bismillah_constructions/shared/data/models/material_escalation.dart';
@@ -627,6 +628,7 @@ class LedgerRepository {
       await txn.delete('access_requests');
       await txn.delete('app_users');
       await txn.delete('app_settings', where: "key LIKE 'cloud_%'");
+      await LocalDb.seedSuperuser(txn);
     });
     _fireCommit();
   }
