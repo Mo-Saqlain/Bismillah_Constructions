@@ -45,6 +45,7 @@ class _TransactionFormScreenState
   Account? _transferTo;
   String? _materialType;
   String? _labourTypeName;
+  DateTime _selectedDate = DateTime.now();
   bool _saving = false;
 
   /// When the user ticks "Counter purchase" on the Material Buy form, the
@@ -176,13 +177,15 @@ class _TransactionFormScreenState
                 amount: amount,
                 projectId: _projectId!,
                 paidFrom: _cashLike!,
-                description: fullMemo);
+                description: fullMemo,
+                createdAt: _selectedDate);
           } else {
             txnId = await ledger.postMaterialBuy(
                 amount: amount,
                 projectId: _projectId!,
                 supplierId: _supplierId!,
-                description: fullMemo);
+                description: fullMemo,
+                createdAt: _selectedDate);
           }
           final entityRepo = await ref.read(entityRepoProvider.future);
           await entityRepo.logMaterialPurchase(
@@ -195,12 +198,9 @@ class _TransactionFormScreenState
             unit: selType?.uom != null
                 ? MaterialUnitX.fromDb(selType!.uom!)
                 : null,
+            createdAt: _selectedDate,
           );
         case TxnKind.materialCounter:
-          // Not picker-exposed today (counter purchases come in via the
-          // Material Buy form with the toggle on), but keep a stub here
-          // so the switch exhaustiveness check stays happy and a future
-          // direct entry point can land cleanly.
           throw StateError(
               'Use Material Buy with the counter-purchase toggle.');
         case TxnKind.labourPayment:
@@ -214,7 +214,8 @@ class _TransactionFormScreenState
               projectId: _projectId!,
               supplierId: _supplierId!,
               paidFrom: _cashLike!,
-              description: memo.isEmpty ? null : memo);
+              description: memo.isEmpty ? null : memo,
+              createdAt: _selectedDate);
         case TxnKind.labourCredit:
           final n = int.tryParse(_workerCountCtrl.text.trim());
           final memo = [
@@ -227,37 +228,43 @@ class _TransactionFormScreenState
               amount: amount,
               projectId: _projectId!,
               supplierId: _supplierId!,
-              description: memo.isEmpty ? null : memo);
+              description: memo.isEmpty ? null : memo,
+              createdAt: _selectedDate);
         case TxnKind.supplierPay:
           txnId = await ledger.postSupplierPay(
               amount: amount,
               supplierId: _supplierId!,
               paidFrom: _cashLike!,
               projectId: _projectId,
-              description: desc);
+              description: desc,
+              createdAt: _selectedDate);
         case TxnKind.receiveFromProject:
           txnId = await ledger.postReceiveFromProject(
               amount: amount,
               projectId: _projectId!,
               receivedInto: _cashLike!,
-              description: desc);
+              description: desc,
+              createdAt: _selectedDate);
         case TxnKind.walletTransfer:
           txnId = await ledger.postWalletTransfer(
               amount: amount,
               from: _cashLike!,
               to: _transferTo!,
-              description: desc);
+              description: desc,
+              createdAt: _selectedDate);
         case TxnKind.personalDraw:
           txnId = await ledger.postPersonalDraw(
               amount: amount,
               paidFrom: _cashLike!,
-              description: desc);
+              description: desc,
+              createdAt: _selectedDate);
         case TxnKind.serviceFee:
           txnId = await ledger.postServiceFee(
               amount: amount,
               projectId: _projectId!,
               receivedInto: _cashLike!,
-              description: desc);
+              description: desc,
+              createdAt: _selectedDate);
       }
       assert(txnId.isNotEmpty);
 
@@ -408,6 +415,43 @@ class _TransactionFormScreenState
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _RoutingSummary(kind: _k),
+              const SizedBox(height: 16),
+
+              // ── Entry Date (Backdating) ──────────────────────────────────
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      final now = DateTime.now();
+                      _selectedDate = DateTime(
+                        picked.year,
+                        picked.month,
+                        picked.day,
+                        now.hour,
+                        now.minute,
+                        now.second,
+                      );
+                    });
+                  }
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Entry Date (Tap to backdate)',
+                    suffixIcon: Icon(Icons.calendar_today),
+                    helperText: 'Tap to select a previous transaction date',
+                  ),
+                  child: Text(
+                    fmtDate(_selectedDate),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
               const SizedBox(height: 16),
 
               // ── Material type + quantity ──────────────────────────────────

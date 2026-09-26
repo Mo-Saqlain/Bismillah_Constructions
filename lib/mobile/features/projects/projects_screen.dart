@@ -250,6 +250,7 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
   final whatsappCtrl = TextEditingController();
   final serviceFeeCtrl = TextEditingController();
   final feeAmountCtrl = TextEditingController();
+  final openingCtrl = TextEditingController();
   ProjectModel model = ProjectModel.withMaterial;
   ServiceFeeType feeType = ServiceFeeType.percent;
 
@@ -424,6 +425,19 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                       ],
                     ),
                 ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: openingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Opening balance (optional, + or -)',
+                    hintText: '+ for Initial Spend, - for Customer Advance',
+                    helperText: 'Positive (+) for initial project spend, Negative (-) for customer advance',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    signed: true,
+                    decimal: true,
+                  ),
+                ),
                 const SizedBox(height: 20),
                 FilledButton(
                   onPressed: () async {
@@ -432,8 +446,6 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                     final budget = double.tryParse(
                       budgetCtrl.text.replaceAll(',', ''),
                     );
-                    // Hard validation: With-Material projects can't function
-                    // accounting-wise without a contract value.
                     if (model == ProjectModel.withMaterial &&
                         (budget == null || budget <= 0)) {
                       ScaffoldMessenger.of(ctx).showSnackBar(
@@ -447,7 +459,7 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                       return;
                     }
                     final repo = await ref.read(entityRepoProvider.future);
-                    await repo.createProject(
+                    final created = await repo.createProject(
                       name: name,
                       model: model,
                       clientName: clientCtrl.text.trim().isEmpty
@@ -477,6 +489,18 @@ void _showProjectForm(BuildContext context, WidgetRef ref) {
                             )
                           : null,
                     );
+
+                    final openingVal = double.tryParse(
+                      openingCtrl.text.replaceAll(',', '').trim(),
+                    ) ?? 0;
+                    if (openingVal != 0) {
+                      final ledger = await ref.read(ledgerRepoProvider.future);
+                      await ledger.postProjectOpeningBalance(
+                        projectId: created.id,
+                        amount: openingVal,
+                      );
+                    }
+
                     bumpLedger(ref);
                     if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                   },
@@ -515,6 +539,7 @@ void _showProjectEditForm(
   final feeAmountCtrl = TextEditingController(
     text: moneyInputText(existing.serviceFeeAmount),
   );
+  final openingCtrl = TextEditingController();
   ServiceFeeType feeType = existing.serviceFeeType;
   ProjectModel model = existing.model;
 
@@ -677,9 +702,21 @@ void _showProjectEditForm(
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
                       const ThousandsSeparatorInputFormatter(),
-                    ],
+                                 ),
+                ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: openingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Opening balance (optional, + or -)',
+                    hintText: '+ for Initial Spend, - for Customer Advance',
+                    helperText: 'Positive (+) for initial project spend, Negative (-) for customer advance',
                   ),
-              ],
+                  keyboardType: const TextInputType.numberWithOptions(
+                    signed: true,
+                    decimal: true,
+                  ),
+                ),
               const SizedBox(height: 20),
               FilledButton(
                 onPressed: () async {
@@ -701,9 +738,6 @@ void _showProjectEditForm(
                     return;
                   }
 
-                  // Switching the model on a project that already has ledger
-                  // activity re-derives its P&L and can strand posted service
-                  // fees — confirm before committing.
                   if (model != existing.model) {
                     final ledger = await ref.read(ledgerRepoProvider.future);
                     final snap = await ledger.projectSnapshot(existing.id);
@@ -750,11 +784,23 @@ void _showProjectEditForm(
                           )
                         : null,
                   );
+
+                  final openingVal = double.tryParse(
+                    openingCtrl.text.replaceAll(',', '').trim(),
+                  ) ?? 0;
+                  if (openingVal != 0) {
+                    final ledger = await ref.read(ledgerRepoProvider.future);
+                    await ledger.postProjectOpeningBalance(
+                      projectId: existing.id,
+                      amount: openingVal,
+                    );
+                  }
+
                   bumpLedger(ref);
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
                 child: const Text('Save'),
-              ),
+              ),          ),
               const SizedBox(height: 12),
             ],
           ),

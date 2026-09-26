@@ -822,6 +822,7 @@ class EntityRepository {
     required double price,
     double? quantity,
     MaterialUnit? unit,
+    DateTime? createdAt,
   }) async {
     final bool hasQty = quantity != null && quantity > 0;
     final item = MaterialItem(
@@ -835,7 +836,7 @@ class EntityRepository {
       rate: hasQty ? price / quantity : null,
       totalCost: price,
       txnType: MaterialTxnType.purchase,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: (createdAt ?? DateTime.now()).toUtc(),
     );
     await _db.insert('material_inventory', item.toMap());
     return item;

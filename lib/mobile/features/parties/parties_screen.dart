@@ -221,6 +221,7 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
     final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
     final taxCtrl = TextEditingController(text: existing?.taxStatus ?? '');
     final bankCtrl = TextEditingController(text: existing?.bankDetails ?? '');
+    final openingCtrl = TextEditingController();
     SupplierCategory? category = existing?.category;
 
     showModalBottomSheet<void>(
@@ -296,20 +297,32 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
                   ),
                   maxLines: 2,
                 ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: openingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Opening balance (optional, + or -)',
+                    hintText: '+ for Payable (you owe), - for Credit/Advance',
+                    helperText: 'Positive (+) if you owe supplier, Negative (-) if advance paid',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true),
+                ),
                 const SizedBox(height: 20),
                 FilledButton(
                   onPressed: () async {
                     final name = nameCtrl.text.trim();
                     if (name.isEmpty) return;
                     final repo = await ref.read(entityRepoProvider.future);
+                    String supplierId;
                     if (existing == null) {
-                      await repo.createSupplier(
+                      final created = await repo.createSupplier(
                         name: name,
                         phone: phoneCtrl.text,
                         category: category,
                         taxStatus: taxCtrl.text,
                         bankDetails: bankCtrl.text,
                       );
+                      supplierId = created.id;
                     } else {
                       await repo.updateSupplierFields(
                         existing.id,
@@ -319,7 +332,18 @@ class _SuppliersScreenState extends ConsumerState<SuppliersScreen> {
                         taxStatus: taxCtrl.text,
                         bankDetails: bankCtrl.text,
                       );
+                      supplierId = existing.id;
                     }
+
+                    final openingVal = double.tryParse(openingCtrl.text.replaceAll(',', '').trim()) ?? 0;
+                    if (openingVal != 0) {
+                      final ledger = await ref.read(ledgerRepoProvider.future);
+                      await ledger.postSupplierOpeningBalance(
+                        supplierId: supplierId,
+                        amount: openingVal,
+                      );
+                    }
+
                     bumpLedger(ref);
                     if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                   },

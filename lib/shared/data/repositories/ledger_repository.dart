@@ -100,12 +100,13 @@ class LedgerRepository {
     String? projectId,
     String? supplierId,
     String? description,
+    DateTime? createdAt,
   }) async {
     if (amount <= 0) {
       throw ArgumentError('Amount must be positive (got $amount).');
     }
     final txnId = _uuid.v4();
-    final now = DateTime.now().toUtc();
+    final now = (createdAt ?? DateTime.now()).toUtc();
     final dev = await _deviceId();
 
     await _db.transaction((txn) async {
@@ -161,6 +162,7 @@ class LedgerRepository {
     required String projectId,
     required String supplierId,
     String? description,
+    DateTime? createdAt,
   }) {
     _assertNonEmpty(projectId, 'projectId');
     _assertNonEmpty(supplierId, 'supplierId');
@@ -171,19 +173,16 @@ class LedgerRepository {
       projectId: projectId,
       supplierId: supplierId,
       description: description,
+      createdAt: createdAt,
     );
   }
 
-  /// Counter purchase: pay for material on the spot, no supplier credit.
-  /// Dr Material Costs / Cr Cash|Bank, tagged to a project but with no
-  /// supplier_id. The corresponding `material_inventory` row carries the
-  /// quantity / unit / rate the user enters, which feeds the price-trend
-  /// report — so even for counter buys we don't lose the unit-price data.
   Future<String> postMaterialCounter({
     required double amount,
     required String projectId,
     required Account paidFrom,
     String? description,
+    DateTime? createdAt,
   }) async {
     _assertNonEmpty(projectId, 'projectId');
     await _assertCashLike(paidFrom);
@@ -192,25 +191,18 @@ class LedgerRepository {
       creditAccount: paidFrom,
       amount: amount,
       projectId: projectId,
-      // supplier_id intentionally null — counter buys are anonymous.
       description: description,
+      createdAt: createdAt,
     );
   }
 
-  /// Pay a labour worker. If the worker already has wages on credit
-  /// (recorded earlier via [postLabourCredit]), this payment **settles the
-  /// outstanding payable first** rather than booking a brand-new cost. Only
-  /// any excess beyond what is owed becomes a new direct labour cost.
-  ///
-  /// Without this rule, paying a worker after recording their wages on
-  /// credit would double-count: Labour Costs would jump to 3000 and the
-  /// payable would still sit at 1500, when the user expects 1500/0.
   Future<String> postLabourPayment({
     required double amount,
     required String projectId,
     required String supplierId,
     required Account paidFrom,
     String? description,
+    DateTime? createdAt,
   }) async {
     _assertNonEmpty(projectId, 'projectId');
     _assertNonEmpty(supplierId, 'supplierId');
@@ -218,8 +210,6 @@ class LedgerRepository {
 
     final owed = await supplierPayableBalance(supplierId);
 
-    // Full settlement: payment ≤ what we owe. One transaction settling the
-    // payable, no new cost (cost was booked at credit time).
     if (owed >= amount - 0.01) {
       return _post(
         debitAccount: Accounts.supplierPayables,
@@ -228,12 +218,10 @@ class LedgerRepository {
         projectId: projectId,
         supplierId: supplierId,
         description: description,
+        createdAt: createdAt,
       );
     }
 
-    // Partial: settle the existing credit, then book the remainder as a
-    // fresh direct labour cost. Two posts under the same description so the
-    // ledger view shows a coherent payment.
     if (owed > 0.01) {
       await _post(
         debitAccount: Accounts.supplierPayables,
@@ -242,6 +230,7 @@ class LedgerRepository {
         projectId: projectId,
         supplierId: supplierId,
         description: description,
+        createdAt: createdAt,
       );
       return _post(
         debitAccount: Accounts.labourCosts,
@@ -250,10 +239,10 @@ class LedgerRepository {
         projectId: projectId,
         supplierId: supplierId,
         description: description,
+        createdAt: createdAt,
       );
     }
 
-    // No outstanding credit — direct labour cost like before.
     return _post(
       debitAccount: Accounts.labourCosts,
       creditAccount: paidFrom,
@@ -261,12 +250,10 @@ class LedgerRepository {
       projectId: projectId,
       supplierId: supplierId,
       description: description,
+      createdAt: createdAt,
     );
   }
 
-  /// Net amount we currently owe a single supplier (credits − debits on
-  /// the Supplier Payables account, scoped to this supplier id). Positive
-  /// = we still owe them; zero = settled; negative = we overpaid.
   Future<double> supplierPayableBalance(String supplierId) async {
     final rows = await _db.rawQuery(
       'SELECT COALESCE(SUM(credit), 0) - COALESCE(SUM(debit), 0) AS bal '
@@ -277,17 +264,12 @@ class LedgerRepository {
     return ((rows.first['bal'] as num?) ?? 0).toDouble();
   }
 
-  /// Wages incurred but not yet paid. Posts Dr Labour Costs / Cr Supplier
-  /// Payables — symmetric to [postMaterialBuy] but for labour.
-  ///
-  /// The cost hits the project ledger immediately (via Labour Costs); the
-  /// payable to the worker shows up on their supplier ledger and is settled
-  /// later by [postSupplierPay] when cash actually leaves.
   Future<String> postLabourCredit({
     required double amount,
     required String projectId,
     required String supplierId,
     String? description,
+    DateTime? createdAt,
   }) {
     _assertNonEmpty(projectId, 'projectId');
     _assertNonEmpty(supplierId, 'supplierId');
@@ -298,6 +280,7 @@ class LedgerRepository {
       projectId: projectId,
       supplierId: supplierId,
       description: description,
+      createdAt: createdAt,
     );
   }
 
@@ -307,6 +290,7 @@ class LedgerRepository {
     required Account paidFrom,
     String? projectId,
     String? description,
+    DateTime? createdAt,
   }) async {
     _assertNonEmpty(supplierId, 'supplierId');
     await _assertCashLike(paidFrom);
@@ -317,18 +301,16 @@ class LedgerRepository {
       supplierId: supplierId,
       projectId: projectId,
       description: description,
+      createdAt: createdAt,
     );
   }
 
-  /// Direct receipt from project — no receivable phase. Money moves from the
-  /// client into a cash/bank account and is booked as project revenue at the
-  /// same time. The project_id is mandatory because the user removed the
-  /// separate Customer entity and the project is the only counterparty.
   Future<String> postReceiveFromProject({
     required double amount,
     required String projectId,
     required Account receivedInto,
     String? description,
+    DateTime? createdAt,
   }) async {
     _assertNonEmpty(projectId, 'projectId');
     await _assertCashLike(receivedInto);
@@ -338,15 +320,16 @@ class LedgerRepository {
       amount: amount,
       projectId: projectId,
       description: description,
+      createdAt: createdAt,
     );
   }
 
-  /// Inter-wallet transfer. Does NOT touch payables (spec section 1).
   Future<String> postWalletTransfer({
     required double amount,
     required Account from,
     required Account to,
     String? description,
+    DateTime? createdAt,
   }) async {
     await _assertCashLike(from);
     await _assertCashLike(to);
@@ -358,15 +341,15 @@ class LedgerRepository {
       creditAccount: from,
       amount: amount,
       description: description ?? 'Transfer ${from.name} → ${to.name}',
+      createdAt: createdAt,
     );
   }
 
-  /// Personal / daily expense draw. Reduces liquid cash but leaves supplier
-  /// payables intact (spec section 1).
   Future<String> postPersonalDraw({
     required double amount,
     required Account paidFrom,
     String? description,
+    DateTime? createdAt,
   }) async {
     await _assertCashLike(paidFrom);
     return _post(
@@ -374,6 +357,7 @@ class LedgerRepository {
       creditAccount: paidFrom,
       amount: amount,
       description: description,
+      createdAt: createdAt,
     );
   }
 
@@ -391,6 +375,72 @@ class LedgerRepository {
       amount: amount,
       description: 'Opening balance',
     );
+  }
+
+  /// Opening balance for a supplier (supports positive payable or negative advance).
+  ///
+  /// [amount] > 0 => Positive balance: We owe the supplier (Payable).
+  ///                Dr Owner's Equity / Cr Supplier Payables
+  /// [amount] < 0 => Negative balance: Supplier owes us / Advance paid (Credit).
+  ///                Dr Supplier Payables / Cr Owner's Equity
+  Future<String?> postSupplierOpeningBalance({
+    required String supplierId,
+    required double amount,
+  }) async {
+    _assertNonEmpty(supplierId, 'supplierId');
+    if (amount == 0) return null;
+
+    final absAmount = amount.abs();
+    if (amount > 0) {
+      return _post(
+        debitAccount: Accounts.ownersEquity,
+        creditAccount: Accounts.supplierPayables,
+        amount: absAmount,
+        supplierId: supplierId,
+        description: 'Opening balance (Payable)',
+      );
+    } else {
+      return _post(
+        debitAccount: Accounts.supplierPayables,
+        creditAccount: Accounts.ownersEquity,
+        amount: absAmount,
+        supplierId: supplierId,
+        description: 'Opening balance (Advance/Credit)',
+      );
+    }
+  }
+
+  /// Opening balance for a project (supports positive spend or negative advance).
+  ///
+  /// [amount] > 0 => Positive balance: Initial project cost / spend before app adoption.
+  ///                Dr Material Costs (for projectId) / Cr Owner's Equity
+  /// [amount] < 0 => Negative balance: Customer advance / deposit before app adoption.
+  ///                Dr Owner's Equity / Cr Project Revenue (for projectId)
+  Future<String?> postProjectOpeningBalance({
+    required String projectId,
+    required double amount,
+  }) async {
+    _assertNonEmpty(projectId, 'projectId');
+    if (amount == 0) return null;
+
+    final absAmount = amount.abs();
+    if (amount > 0) {
+      return _post(
+        debitAccount: Accounts.materialCosts,
+        creditAccount: Accounts.ownersEquity,
+        amount: absAmount,
+        projectId: projectId,
+        description: 'Opening balance (Initial Spend)',
+      );
+    } else {
+      return _post(
+        debitAccount: Accounts.ownersEquity,
+        creditAccount: Accounts.projectRevenue,
+        amount: absAmount,
+        projectId: projectId,
+        description: 'Opening balance (Customer Advance)',
+      );
+    }
   }
 
   /// Service fee for Labour-Rate model (spec section 2 / interim fees).
