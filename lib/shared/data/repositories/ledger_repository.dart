@@ -449,6 +449,7 @@ class LedgerRepository {
     required String projectId,
     required Account receivedInto,
     String? description,
+    DateTime? createdAt,
   }) async {
     _assertNonEmpty(projectId, 'projectId');
     await _assertCashLike(receivedInto);
@@ -458,6 +459,7 @@ class LedgerRepository {
       amount: amount,
       projectId: projectId,
       description: description,
+      createdAt: createdAt,
     );
   }
 

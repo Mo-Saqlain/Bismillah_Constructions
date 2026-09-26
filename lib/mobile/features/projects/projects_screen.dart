@@ -702,8 +702,8 @@ void _showProjectEditForm(
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
                       const ThousandsSeparatorInputFormatter(),
-                                 ),
-                ],
+                    ],
+                  ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: openingCtrl,
@@ -800,7 +800,7 @@ void _showProjectEditForm(
                   if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                 },
                 child: const Text('Save'),
-              ),          ),
+              ),
               const SizedBox(height: 12),
             ],
           ),
