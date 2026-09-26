@@ -704,6 +704,7 @@ void _showProjectEditForm(
                       const ThousandsSeparatorInputFormatter(),
                     ],
                   ),
+                ],
                 const SizedBox(height: 12),
                 TextField(
                   controller: openingCtrl,
